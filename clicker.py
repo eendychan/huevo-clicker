@@ -9,9 +9,37 @@ from ctypes import wintypes
 #  WinAPI
 # ==========================================================
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+winmm  = ctypes.WinDLL("winmm",  use_last_error=True)
 
+# Точность системного таймера → 1 мс (по умолчанию 15.6 мс)
+try:
+    winmm.timeBeginPeriod(1)
+except Exception:
+    pass
+
+INPUT_MOUSE          = 0
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP   = 0x0004
+MOUSEEVENTF_MOVE     = 0x0001
+MOUSEEVENTF_ABSOLUTE = 0x8000
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx",          wintypes.LONG),
+        ("dy",          wintypes.LONG),
+        ("mouseData",   wintypes.DWORD),
+        ("dwFlags",     wintypes.DWORD),
+        ("time",        wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    ]
+
+
+class INPUT(ctypes.Structure):
+    class _U(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT)]
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wintypes.DWORD), ("u", _U)]
 
 
 class POINT(ctypes.Structure):
@@ -24,31 +52,43 @@ def get_cursor_pos():
     return pt.x, pt.y
 
 
-def set_cursor_pos(x, y):
-    user32.SetCursorPos(int(x), int(y))
+def _build_click_inputs(x, y, screen_w, screen_h):
+    """
+    Один SendInput-массив: перемещение + DOWN + UP.
+    Координаты нормализуются в 0..65535 — так требует MOUSEEVENTF_ABSOLUTE.
+    """
+    ax = int(x * 65535 / max(1, screen_w - 1))
+    ay = int(y * 65535 / max(1, screen_h - 1))
+
+    move = INPUT(
+        type=INPUT_MOUSE,
+        mi=MOUSEINPUT(
+            dx=ax, dy=ay, mouseData=0,
+            dwFlags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+            time=0, dwExtraInfo=None,
+        ),
+    )
+    down = INPUT(
+        type=INPUT_MOUSE,
+        mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None),
+    )
+    up = INPUT(
+        type=INPUT_MOUSE,
+        mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None),
+    )
+    return (INPUT * 3)(move, down, up)
 
 
-def mouse_down():
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-
-
-def mouse_up():
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-
-
-def click_at(x, y):
-    set_cursor_pos(x, y)
-    mouse_down()
-    mouse_up()
+# Кэш на размер экрана — не дёргаем GetSystemMetrics в горячем цикле
+_SCREEN_W = user32.GetSystemMetrics(0)
+_SCREEN_H = user32.GetSystemMetrics(1)
 
 
 # ==========================================================
-#  Палитра / размеры
+#  Палитра
 # ==========================================================
 BG         = "#1e1f22"
-SURFACE    = "#26282c"
 SURFACE_2  = "#2f3136"
-SURFACE_3  = "#35373c"
 BORDER     = "#3a3d42"
 TEXT       = "#f2f3f5"
 TEXT_MUTED = "#8b8f96"
@@ -58,28 +98,10 @@ GREEN      = "#3ba55d"
 RED        = "#ed4245"
 YELLOW     = "#faa61a"
 
-FONT_TITLE   = ("Unbounded", 15, "bold")
-FONT_SUB     = ("Unbounded", 8)
-FONT_BODY    = ("Segoe UI", 10)
-FONT_BODY_B  = ("Segoe UI", 10, "bold")
-FONT_MONO    = ("Consolas", 10)
-FONT_TINY    = ("Segoe UI", 8)
-
-
-# ==========================================================
-#  Иконки (SVG-пути → маленькие canvas-рисунки через текст)
-#  Простая эмуляция: рисуем через юникод-глифы, но в цвете.
-#  Полноценный SVG в tkinter без доп. библиотек не вставить,
-#  поэтому берём лаконичные символы + цвет.
-# ==========================================================
-ICON_TARGET   = "◎"
-ICON_PLUS     = "+"
-ICON_TRASH    = "✕"
-ICON_PLAY     = "▶"
-ICON_STOP     = "■"
-ICON_CURSOR   = "➤"
-ICON_MOUSE    = "🖱"
-ICON_WAND     = "✦"
+FONT_TITLE = ("Unbounded", 10, "bold")
+FONT_BODY  = ("Segoe UI", 9)
+FONT_MONO  = ("Consolas", 9)
+FONT_TINY  = ("Segoe UI", 8)
 
 
 # ==========================================================
@@ -89,7 +111,7 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("320x545")
+        self.root.geometry("220x290")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
@@ -97,8 +119,6 @@ class HuEvoClicker:
         self.points = []
         self.is_running = False
         self.thread = None
-        self.mode = "normal"
-        self._anim_job = None
 
         self._build_ui()
 
@@ -106,220 +126,101 @@ class HuEvoClicker:
         keyboard.add_hotkey('F6', self.toggle_clicking)
 
     # ------------------------------------------------------
-    #  UI
-    # ------------------------------------------------------
     def _build_ui(self):
         root = self.root
 
-        # ------- Header -------
         header = tk.Frame(root, bg=BG)
-        header.pack(fill="x", padx=14, pady=(12, 8))
+        header.pack(fill="x", padx=10, pady=(8, 4))
+        tk.Label(header, text="✦", bg=BG, fg=ACCENT,
+                 font=("Segoe UI", 12, "bold")).pack(side="left", padx=(0, 4))
+        tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
+                 font=FONT_TITLE).pack(side="left")
 
-        tk.Label(header, text=ICON_WAND, bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 16)).pack(side="left", padx=(0, 6))
+        # Точки
+        tk.Button(
+            root, text="+  Добавить точку (F2)", command=self.add_point,
+            bg=SURFACE_2, fg=TEXT, activebackground=ACCENT_HOV,
+            activeforeground="#fff", relief="flat", bd=0,
+            font=FONT_BODY, cursor="hand2", highlightthickness=1,
+            highlightbackground=BORDER,
+        ).pack(fill="x", padx=10, pady=(2, 4), ipady=4)
 
-        title_wrap = tk.Frame(header, bg=BG)
-        title_wrap.pack(side="left")
-
-        tk.Label(title_wrap, text="huEVO clicker", bg=BG, fg=TEXT,
-                 font=FONT_TITLE).pack(anchor="w")
-        tk.Label(title_wrap, text="click · farm · chill", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_SUB).pack(anchor="w")
-
-        # ------- Mode chips -------
-        self._section("РЕЖИМ")
-
-        chips = tk.Frame(root, bg=BG)
-        chips.pack(fill="x", padx=14, pady=(0, 8))
-
-        self.chip_normal = self._make_chip(chips, ICON_CURSOR + "  Обычный", "normal")
-        self.chip_mouse  = self._make_chip(chips, ICON_MOUSE + "  Свободная мышь", "free")
-
-        self.chip_normal.pack(side="left", padx=(0, 6))
-        self.chip_mouse.pack(side="left")
-
-        self._apply_chip_state()
-
-        # Hint для режима
-        self.mode_hint = tk.Label(
-            root, text="", bg=BG, fg=TEXT_MUTED, font=FONT_TINY,
-            wraplength=290, justify="left",
-        )
-        self.mode_hint.pack(fill="x", padx=14, pady=(0, 8))
-
-        # ------- Points -------
-        self._section("ТОЧКИ")
-
-        add_btn = self._flat_button(root, ICON_PLUS + "  Добавить точку",
-                                    self.add_point, fg=TEXT)
-        add_btn.pack(fill="x", padx=14, pady=(0, 6), ipady=6)
-
-        list_wrap = tk.Frame(root, bg=SURFACE_2, highlightbackground=BORDER,
-                             highlightthickness=1)
-        list_wrap.pack(fill="x", padx=14)
+        list_wrap = tk.Frame(root, bg=SURFACE_2,
+                             highlightbackground=BORDER, highlightthickness=1)
+        list_wrap.pack(fill="x", padx=10)
 
         self.listbox = tk.Listbox(
             list_wrap, height=4, bg=SURFACE_2, fg=TEXT,
             selectbackground=ACCENT, selectforeground="#fff",
-            bd=0, highlightthickness=0, font=FONT_MONO,
-            activestyle="none",
+            bd=0, highlightthickness=0, font=FONT_MONO, activestyle="none",
         )
-        self.listbox.pack(fill="x", padx=6, pady=6)
+        self.listbox.pack(fill="x", padx=4, pady=4)
 
-        clear_btn = self._flat_button(root, ICON_TRASH + "  Очистить",
-                                      self.clear_points, fg=TEXT_MUTED,
-                                      hover_bg=SURFACE_3)
-        clear_btn.pack(fill="x", padx=14, pady=(6, 0), ipady=4)
+        tk.Button(
+            root, text="✕  Очистить", command=self.clear_points,
+            bg=SURFACE_2, fg=TEXT_MUTED, activebackground="#3a3d43",
+            activeforeground=TEXT, relief="flat", bd=0,
+            font=FONT_TINY, cursor="hand2", highlightthickness=1,
+            highlightbackground=BORDER,
+        ).pack(fill="x", padx=10, pady=(4, 0), ipady=2)
 
-        # ------- Interval -------
-        self._section("ИНТЕРВАЛ")
-
-        tf = tk.Frame(root, bg=SURFACE, highlightbackground=BORDER,
-                      highlightthickness=1)
-        tf.pack(fill="x", padx=14)
-        tf.configure(padx=10, pady=8)
+        # Интервал
+        tf = tk.Frame(root, bg=BG)
+        tf.pack(fill="x", padx=10, pady=(6, 2))
 
         self.min_var = tk.StringVar(value="0")
         self.sec_var = tk.StringVar(value="0")
-        self.ms_var  = tk.StringVar(value="250")
+        self.ms_var  = tk.StringVar(value="50")
 
         def entry(parent, var):
-            e = tk.Entry(parent, textvariable=var, width=4, justify="center",
+            e = tk.Entry(parent, textvariable=var, width=3, justify="center",
                          bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
                          relief="flat", font=FONT_MONO, bd=0,
                          highlightthickness=1, highlightbackground=BORDER,
                          highlightcolor=ACCENT)
-            e.pack(side="left", ipady=4, padx=(0, 2))
+            e.pack(side="left", ipady=2, padx=(0, 1))
             return e
 
         entry(tf, self.min_var)
-        tk.Label(tf, text="мин", bg=SURFACE, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(0, 10))
+        tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(0, 4))
         entry(tf, self.sec_var)
-        tk.Label(tf, text="сек", bg=SURFACE, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(0, 10))
+        tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(0, 4))
         entry(tf, self.ms_var)
-        tk.Label(tf, text="мс", bg=SURFACE, fg=TEXT_MUTED,
+        tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TINY).pack(side="left")
 
-        # ------- Status pill -------
-        self.status_wrap = tk.Frame(root, bg=BG)
-        self.status_wrap.pack(fill="x", padx=14, pady=(12, 6))
-
+        # Статус
         self.pill = tk.Label(
-            self.status_wrap, text="●  Выключено",
-            bg=RED, fg="#ffffff", font=FONT_BODY_B,
-            padx=12, pady=4,
+            root, text="●  Выкл", bg=RED, fg="#fff",
+            font=("Segoe UI", 8, "bold"), padx=8, pady=2,
         )
-        self.pill.pack()
+        self.pill.pack(pady=(6, 4))
 
-        # ------- Big button -------
+        # Кнопка
         self.start_btn = tk.Button(
-            root, text=f"{ICON_PLAY}   Старт",
-            command=self.toggle_clicking,
-            bg=ACCENT, fg="#ffffff",
-            activebackground=ACCENT_HOV, activeforeground="#ffffff",
+            root, text="▶  Старт (F6)", command=self.toggle_clicking,
+            bg=ACCENT, fg="#fff",
+            activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, cursor="hand2",
-            font=("Unbounded", 10, "bold"),
+            font=("Unbounded", 8, "bold"),
         )
-        self.start_btn.pack(fill="x", padx=14, pady=(0, 6), ipady=10)
+        self.start_btn.pack(fill="x", padx=10, pady=(0, 6), ipady=6)
 
-        # ------- Footer hint -------
-        tk.Label(
-            root,
-            text="F2 — добавить точку   ·   F6 — старт/стоп",
-            bg=BG, fg=TEXT_MUTED, font=FONT_TINY,
-        ).pack(pady=(0, 10))
+        tk.Label(root, text="F2 — точка · F6 — старт/стоп",
+                 bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
 
-        # Начальное состояние
-        self._update_hint()
-
-    # ------------------------------------------------------
-    #  Хелперы UI
-    # ------------------------------------------------------
-    def _section(self, text):
-        tk.Label(self.root, text=text, bg=BG, fg=TEXT_MUTED,
-                 font=("Unbounded", 7, "bold")).pack(anchor="w", padx=14, pady=(6, 4))
-
-    def _make_chip(self, parent, text, value):
-        chip = tk.Label(parent, text=text, bg=SURFACE_2, fg=TEXT,
-                        font=FONT_BODY_B, padx=10, pady=6, cursor="hand2",
-                        highlightthickness=1, highlightbackground=BORDER)
-        chip.bind("<Button-1>", lambda e, v=value: self.set_mode(v))
-        chip.bind("<Enter>",    lambda e, c=chip: self._chip_hover(c, True))
-        chip.bind("<Leave>",    lambda e, c=chip: self._chip_hover(c, False))
-        return chip
-
-    def _chip_hover(self, chip, on):
-        if chip in (self.chip_normal, self.chip_mouse) and self._chip_is_active(chip):
-            return
-        chip.config(bg=SURFACE_3 if on else SURFACE_2)
-
-    def _chip_is_active(self, chip):
-        return (self.mode == "normal" and chip is self.chip_normal) or \
-               (self.mode == "free"   and chip is self.chip_mouse)
-
-    def _apply_chip_state(self):
-        for chip, val in ((self.chip_normal, "normal"), (self.chip_mouse, "free")):
-            if val == self.mode:
-                chip.config(bg=ACCENT, fg="#ffffff", highlightbackground=ACCENT)
-            else:
-                chip.config(bg=SURFACE_2, fg=TEXT, highlightbackground=BORDER)
-
-    def _flat_button(self, parent, text, cmd, fg=TEXT, hover_bg=SURFACE_3):
-        b = tk.Button(parent, text=text, command=cmd,
-                      bg=SURFACE_2, fg=fg,
-                      activebackground=hover_bg, activeforeground=fg,
-                      relief="flat", bd=0, cursor="hand2",
-                      font=FONT_BODY, highlightthickness=1,
-                      highlightbackground=BORDER)
-        b.bind("<Enter>", lambda e: b.config(bg=hover_bg))
-        b.bind("<Leave>", lambda e: b.config(bg=SURFACE_2))
-        return b
-
-    # ------------------------------------------------------
-    #  Переключение режима
-    # ------------------------------------------------------
-    def set_mode(self, mode):
-        self.mode = mode
-        self._apply_chip_state()
-        self._update_hint()
-
-    def _update_hint(self):
-        if self.mode == "normal":
-            self.mode_hint.config(
-                text="Курсор прыгает по точкам и кликает. Мышь занята во время кликов."
-            )
-        else:
-            self.mode_hint.config(
-                text="Курсор ненадолго телепортируется в точки, кликает и возвращается "
-                     "туда, где ты держишь мышь. Между прыжками ты ей управляешь."
-            )
-
-    # ------------------------------------------------------
-    #  Точки
     # ------------------------------------------------------
     def add_point(self):
         x, y = get_cursor_pos()
         self.points.append((x, y))
-        self.listbox.insert(tk.END, f"  {x:>5}, {y:>5}")
-        self._flash_row(len(self.points) - 1)
-
-    def _flash_row(self, idx):
-        # короткая подсветка новой строки
-        try:
-            self.listbox.itemconfig(idx, bg=SURFACE_3)
-            self.root.after(220, lambda i=idx: self.listbox.itemconfig(i, bg=SURFACE_2))
-        except tk.TclError:
-            pass
+        self.listbox.insert(tk.END, f"{x:>5},{y:>5}")
 
     def clear_points(self):
         self.points.clear()
         self.listbox.delete(0, tk.END)
 
-    # ------------------------------------------------------
-    #  Интервал
-    # ------------------------------------------------------
     def get_interval_seconds(self):
         try:
             m  = int(self.min_var.get() or 0)
@@ -331,111 +232,69 @@ class HuEvoClicker:
             return 0.0
 
     # ------------------------------------------------------
-    #  Старт / стоп
-    # ------------------------------------------------------
     def toggle_clicking(self):
         if self.is_running:
             self.is_running = False
-            self._set_pill("●  Выключено", RED)
-            self.start_btn.config(text=f"{ICON_PLAY}   Старт", bg=ACCENT,
-                                  activebackground=ACCENT_HOV)
-            self._stop_pulse()
+            self.root.after(0, lambda: self.pill.config(text="●  Выкл", bg=RED))
+            self.root.after(0, lambda: self.start_btn.config(
+                text="▶  Старт (F6)", bg=ACCENT, activebackground=ACCENT_HOV))
         else:
             if not self.points:
-                self._set_pill("⚠  Нет точек", YELLOW)
+                self.root.after(0, lambda: self.pill.config(text="⚠  нет точек", bg=YELLOW))
                 return
-
             self.is_running = True
-            self._set_pill("●  Работает", GREEN)
-            self.start_btn.config(text=f"{ICON_STOP}   Стоп", bg=RED,
-                                  activebackground="#c03535")
-            self._start_pulse()
-
-            target = (self._loop_normal if self.mode == "normal"
-                      else self._loop_free_mouse)
-            self.thread = threading.Thread(target=target, daemon=True)
+            self.root.after(0, lambda: self.pill.config(text="●  Работа", bg=GREEN))
+            self.root.after(0, lambda: self.start_btn.config(
+                text="■  Стоп (F6)", bg=RED, activebackground="#c03535"))
+            self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
 
-    def _set_pill(self, text, color):
-        self.root.after(0, lambda: self.pill.config(text=text, bg=color))
-
-    # лёгкая пульсация статуса, пока работает
-    def _start_pulse(self):
-        self._pulse_on = True
-        self._pulse()
-
-    def _stop_pulse(self):
-        self._pulse_on = False
-        if self._anim_job:
-            try:
-                self.root.after_cancel(self._anim_job)
-            except Exception:
-                pass
-            self._anim_job = None
-
-    def _pulse(self):
-        if not self._pulse_on:
-            return
-        cur = self.pill.cget("bg")
-        nxt = GREEN if cur != GREEN else "#2f8e4c"
-        try:
-            self.pill.config(bg=nxt)
-        except tk.TclError:
-            return
-        self._anim_job = self.root.after(420, self._pulse)
-
     # ------------------------------------------------------
-    #  Циклы
+    #  Горячий цикл
     # ------------------------------------------------------
-    def _loop_normal(self):
-        while self.is_running:
-            interval = self.get_interval_seconds()
-            t0 = time.perf_counter()
-            for (x, y) in self.points:
-                if not self.is_running:
-                    break
-                click_at(x, y)
-            self._sleep_remainder(interval, t0)
+    def _loop(self):
+        send_input = user32.SendInput
+        send_input.argtypes = (wintypes.UINT,
+                               ctypes.POINTER(INPUT),
+                               ctypes.c_int)
+        send_input.restype = wintypes.UINT
 
-    def _loop_free_mouse(self):
-        """
-        Телепорт → клик → возврат туда, где была мышь.
-        Между итерациями мышь полностью свободна.
-        """
+        points = self.points
+        sw, sh = _SCREEN_W, _SCREEN_H
+
+        # Предсобираем INPUT-массивы для каждой точки один раз
+        cache = {}
+        for p in points:
+            cache[p] = _build_click_inputs(p[0], p[1], sw, sh)
+
+        n = len(points)
+        i = 0
+        next_t = time.perf_counter()
+        tick = 0
+
         while self.is_running:
             interval = self.get_interval_seconds()
 
-            # Запоминаем, где сейчас «живёт» пользовательская мышь
-            user_x, user_y = get_cursor_pos()
+            p = points[i % n]
+            arr = cache[p]
+            send_input(3, arr, ctypes.sizeof(INPUT))
+            i += 1
 
-            # Делаем проход по всем точкам
-            for (x, y) in self.points:
-                if not self.is_running:
-                    break
-                # Перед кликом заново фиксируем реальную позицию —
-                # пользователь мог двинуть мышь между точками
-                user_x, user_y = get_cursor_pos()
-                set_cursor_pos(x, y)
-                mouse_down()
-                mouse_up()
-                set_cursor_pos(user_x, user_y)
-
-            # И после прохода возвращаем курсор туда, где он был в начале
-            set_cursor_pos(user_x, user_y)
-
-            self._sleep_remainder(interval, t0=None, start=time.perf_counter(),
-                                  whole=interval)
-
-    def _sleep_remainder(self, interval, t0=None, start=None, whole=None):
-        if start is None:
-            start = t0
-        elapsed = time.perf_counter() - start
-        target = interval if whole is None else whole
-        remaining = target - elapsed
-        if remaining > 0:
-            time.sleep(remaining)
-        else:
-            time.sleep(0)
+            # Планируем следующий клик по абсолютному времени
+            if interval > 0:
+                next_t += interval
+                now = time.perf_counter()
+                if next_t > now:
+                    time.sleep(next_t - now)
+                else:
+                    # отстали — сбрасываем базу, чтобы не копить дрейф
+                    next_t = now
+            else:
+                # «0 мс» — максимальный темп; раз в 32 клика отдаём квант,
+                # чтобы UI не подвешивался
+                tick += 1
+                if (tick & 31) == 0:
+                    time.sleep(0)
 
 
 if __name__ == "__main__":

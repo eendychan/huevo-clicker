@@ -1,13 +1,33 @@
 import tkinter as tk
-import pyautogui
 import keyboard
 import threading
 import time
-import sys
-import os
+import ctypes
+from ctypes import wintypes
 
-# Отключаем "fail-safe" (иначе при быстрых кликах у края экрана pyautogui кинет исключение)
-pyautogui.FAILSAFE = False
+# --- WinAPI ---
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+# Константы для mouse_event
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+
+# Для получения позиции курсора
+class POINT(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+def get_cursor_pos():
+    pt = POINT()
+    user32.GetCursorPos(ctypes.byref(pt))
+    return pt.x, pt.y
+
+
+def click_at(x, y):
+    """Мгновенно перемещает курсор и кликает ЛКМ."""
+    user32.SetCursorPos(int(x), int(y))
+    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
 
 class MiniClicker:
@@ -15,11 +35,10 @@ class MiniClicker:
         self.root = root
         self.root.title("Clicker")
         self.root.geometry("230x300")
-        self.root.attributes("-topmost", True)  # окно поверх всех
+        self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        # Переменные
-        self.points = []          # список координат [(x, y), ...]
+        self.points = []
         self.is_running = False
         self.thread = None
 
@@ -33,35 +52,32 @@ class MiniClicker:
         tk.Button(root, text="🗑 Очистить точки",
                   command=self.clear_points).pack(pady=2, fill='x', padx=6)
 
-        # Интервал
         frame_time = tk.Frame(root)
         frame_time.pack(pady=6)
 
         self.min_var = tk.StringVar(value="0")
-        self.sec_var = tk.StringVar(value="1")
-        self.ms_var = tk.StringVar(value="0")
+        self.sec_var = tk.StringVar(value="0")
+        self.ms_var = tk.StringVar(value="100")
 
         tk.Label(frame_time, text="Интервал:").pack(side='left')
         tk.Entry(frame_time, textvariable=self.min_var, width=3).pack(side='left')
         tk.Label(frame_time, text="м").pack(side='left')
         tk.Entry(frame_time, textvariable=self.sec_var, width=3).pack(side='left')
         tk.Label(frame_time, text="с").pack(side='left')
-        tk.Entry(frame_time, textvariable=self.ms_var, width=3).pack(side='left')
+        tk.Entry(frame_time, textvariable=self.ms_var, width=4).pack(side='left')
         tk.Label(frame_time, text="мс").pack(side='left')
 
-        # Статус
         self.status_label = tk.Label(root, text="🔴 Выключено", fg="red")
         self.status_label.pack(pady=6)
 
         tk.Label(root, text="F2 — добавить точку\nF6 — вкл/выкл",
                  font=("Arial", 8), fg="gray", justify="center").pack(side='bottom', pady=6)
 
-        # Горячие клавиши
         keyboard.add_hotkey('F2', self.add_point)
         keyboard.add_hotkey('F6', self.toggle_clicking)
 
     def add_point(self):
-        x, y = pyautogui.position()
+        x, y = get_cursor_pos()
         self.points.append((x, y))
         self.listbox.insert(tk.END, f"{x}, {y}")
 
@@ -75,9 +91,9 @@ class MiniClicker:
             s = int(self.sec_var.get() or 0)
             ms = int(self.ms_var.get() or 0)
             total = (m * 60) + s + (ms / 1000.0)
-            return total if total > 0 else 0.01
+            return total if total > 0 else 0.0
         except ValueError:
-            return 0.01
+            return 0.0
 
     def toggle_clicking(self):
         if self.is_running:
@@ -94,15 +110,24 @@ class MiniClicker:
     def click_loop(self):
         while self.is_running:
             interval = self.get_interval_seconds()
+            start = time.perf_counter()
+
             for point in self.points:
                 if not self.is_running:
                     break
-                pyautogui.click(point[0], point[1])
-            time.sleep(interval)
+                click_at(point[0], point[1])
+
+            # Компенсация: спим ровно столько, сколько осталось до конца интервала
+            elapsed = time.perf_counter() - start
+            remaining = interval - elapsed
+            if remaining > 0:
+                # sleep(0) отдаёт квант потоку, чтобы не задушить UI
+                time.sleep(remaining)
+            else:
+                time.sleep(0)  # без паузы, но и без зависания UI
 
 
 if __name__ == "__main__":
-    # Запускаем от имени администратора? Не обязательно, но лучше для некоторых игр.
     root = tk.Tk()
     app = MiniClicker(root)
     root.mainloop()

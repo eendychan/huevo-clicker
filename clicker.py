@@ -129,26 +129,35 @@ def resource_path(relative_path):
 class HuEvoClicker:
     def __init__(self, root):
         self.root = root
+        self.root.overrideredirect(True)
         self.root.geometry("250x350")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
+        self.root.resizable(False, False)
 
-        # Удаляем стандартную шапку Windows через WinAPI, сохраняя возможность сворачивания в таскбар
-        def apply_win32_style():
+        # Установка иконки приложения (.ico)
+        ico_path = resource_path("icon.ico")
+        if os.path.exists(ico_path):
+            try:
+                self.root.iconbitmap(ico_path)
+            except Exception:
+                pass
+
+        # Исправление отображения в панели задач для overrideredirect окна
+        def fix_taskbar():
             try:
                 hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
                 if not hwnd:
                     hwnd = root.winfo_id()
-                style = ctypes.windll.user32.GetWindowLongW(hwnd, -16)
-                style = style & ~0x00C00000  # WS_CAPTION
-                style = style & ~0x00040000  # WS_THICKFRAME
-                style = style | 0x00020000   # WS_MINIMIZEBOX
-                style = style | 0x00080000   # WS_SYSMENU
-                ctypes.windll.user32.SetWindowLongW(hwnd, -16, style)
-                ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0020)
+                ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+                ex_style = ex_style & ~0x00000080  # WS_EX_TOOLWINDOW
+                ex_style = ex_style | 0x00040000   # WS_EX_APPWINDOW
+                ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex_style)
+                root.withdraw()
+                root.deiconify()
             except Exception:
                 pass
-        root.after(50, apply_win32_style)
+        root.after(50, fix_taskbar)
 
         self.toast_anim_id = None
         self.tab_active = False
@@ -262,7 +271,6 @@ class HuEvoClicker:
         self.balance_card.pack(fill="x", pady=(2, 3))
         self.balance_card.pack_propagate(False)
 
-        # Левая часть баланс-карты (кот + цифры)
         self.balance_left_frame = tk.Frame(self.balance_card, bg=SURFACE)
         self.balance_left_frame.pack(side="left", fill="y", padx=4)
 
@@ -274,7 +282,6 @@ class HuEvoClicker:
             self.balance_label.config(image=self.cat_photo_dim, compound="left")
         self.balance_label.pack(side="left", pady=5)
 
-        # Правая часть баланс-карты (аватарка и никнейм)
         self.balance_right_frame = tk.Frame(self.balance_card, bg=SURFACE)
         self.balance_right_frame.pack(side="right", fill="y", padx=6)
 
@@ -511,16 +518,49 @@ class HuEvoClicker:
 
     def open_sync_modal(self):
         modal = tk.Toplevel(self.root)
-        modal.title("Синхронизация баланса")
+        modal.overrideredirect(True)
         modal.geometry("380x470")
         modal.configure(bg=BG)
         modal.attributes("-topmost", True)
         modal.resizable(False, False)
 
+        ico_path = resource_path("icon.ico")
+        if os.path.exists(ico_path):
+            try:
+                modal.iconbitmap(ico_path)
+            except Exception:
+                pass
+
+        # Кастомная шапка для модального окна
+        modal_title = tk.Frame(modal, bg=BG, height=28)
+        modal_title.pack(fill="x", side="top")
+        modal_title.pack_propagate(False)
+
+        tk.Label(modal_title, text="Синхронизация баланса", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TITLE).pack(side="left", padx=10)
+
+        close_modal_btn = tk.Button(modal_title, text="✕", command=modal.destroy,
+                                    bg=BG, fg=TEXT_MUTED, activebackground=RED_COL,
+                                    activeforeground="#fff", relief="flat", bd=0, font=FONT_TINY, width=3)
+        close_modal_btn.pack(side="right", fill="y")
+
+        def start_move_modal(event):
+            modal.x = event.x
+            modal.y = event.y
+        def do_move_modal(event):
+            x = modal.winfo_x() + (event.x - modal.x)
+            y = modal.winfo_y() + (event.y - modal.y)
+            modal.geometry(f"+{x}+{y}")
+        modal_title.bind("<Button-1>", start_move_modal)
+        modal_title.bind("<B1-Motion>", do_move_modal)
+
+        modal_body = tk.Frame(modal, bg=BG)
+        modal_body.pack(fill="both", expand=True, padx=16, pady=8)
+
         tk.Label(
-            modal, text="Инструкция по синхронизации",
+            modal_body, text="Инструкция по синхронизации",
             bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
-        ).pack(anchor="w", padx=16, pady=(16, 4))
+        ).pack(anchor="w", pady=(0, 4))
 
         info_text = (
             "1. Установите расширение Браузера Tampermonkey.\n"
@@ -529,12 +569,12 @@ class HuEvoClicker:
             "   никнейм и статистика будут передаваться в кликер."
         )
         tk.Label(
-            modal, text=info_text, bg=BG, fg=TEXT_MUTED,
+            modal_body, text=info_text, bg=BG, fg=TEXT_MUTED,
             font=FONT_TINY, justify="left"
-        ).pack(anchor="w", padx=16, pady=(0, 8))
+        ).pack(anchor="w", pady=(0, 8))
 
-        code_header = tk.Frame(modal, bg=BG)
-        code_header.pack(fill="x", padx=16, pady=(0, 2))
+        code_header = tk.Frame(modal_body, bg=BG)
+        code_header.pack(fill="x", pady=(0, 2))
 
         tk.Label(
             code_header, text="Код скрипта Tampermonkey:",
@@ -601,8 +641,8 @@ class HuEvoClicker:
         )
         copy_icon_btn.pack(side="right")
 
-        text_frame = tk.Frame(modal, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        text_frame.pack(fill="both", expand=True, padx=16, pady=(4, 10))
+        text_frame = tk.Frame(modal_body, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        text_frame.pack(fill="both", expand=True, pady=(4, 8))
 
         script_box = tk.Text(
             text_frame, bg=SURFACE, fg=TEXT, insertbackground=TEXT,
@@ -613,12 +653,12 @@ class HuEvoClicker:
         script_box.config(state="disabled")
 
         copy_btn = tk.Button(
-            modal, text="Скопировать скрипт полностью", 
+            modal_body, text="Скопировать скрипт полностью", 
             command=lambda: self._copy_to_clipboard(script_code, copy_btn, is_icon=False),
             bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2"
         )
-        copy_btn.pack(fill="x", padx=16, pady=(0, 16), ipady=6)
+        copy_btn.pack(fill="x", pady=(0, 8), ipady=6)
 
     def _copy_to_clipboard(self, text, btn, is_icon=False):
         self.root.clipboard_clear()
@@ -680,7 +720,6 @@ class HuEvoClicker:
                 clean_u = user_str.strip()
                 short_user = (clean_u[:3] + "...") if len(clean_u) > 3 else clean_u
 
-            # Если пришел относительный URL аватара — дополняем доменом
             if av_url and av_url.startswith('/'):
                 av_url = "https://huevo.su" + av_url
 

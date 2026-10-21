@@ -127,12 +127,15 @@ class HuEvoClicker:
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        # Загрузка иконки котика (из папки или из скомпилированного EXE)
+        # Загрузка иконки котика (для плашки баланса и иконки окна)
         cat_path = resource_path("cat.png")
         self.cat_img = None
         if os.path.exists(cat_path):
             try:
                 raw_cat = tk.PhotoImage(file=cat_path)
+                # Устанавливаем иконку на само окно приложения
+                self.root.iconphoto(True, raw_cat)
+                
                 h = raw_cat.height()
                 if h > 16:
                     factor = max(1, h // 16)
@@ -185,7 +188,7 @@ class HuEvoClicker:
             lbl_args["image"] = self.cat_img
             lbl_args["compound"] = "left"
             
-        self.balance_label = tk.Label(self.balance_card, text="  💰 Ожидание вкладки...", **lbl_args)
+        self.balance_label = tk.Label(self.balance_card, text="  Ожидание вкладки...", **lbl_args)
         self.balance_label.pack()
 
         # События клика и наведения для карточки баланса
@@ -431,7 +434,7 @@ class HuEvoClicker:
                 if self.cat_img:
                     prefix = " "
                 self.balance_label.config(
-                    text=f"{prefix}💰 {bal:,}".replace(",", " "), fg=TEXT,
+                    text=f"{prefix}{bal:,}".replace(",", " "), fg=TEXT,
                 )
                 self.balance_card.config(bg=SURFACE)
             self.root.after(0, _do)
@@ -446,7 +449,7 @@ class HuEvoClicker:
                     prefix = "  "
                     if self.cat_img:
                         prefix = " "
-                    self.balance_label.config(text=f"{prefix}💰 Вкладка не найдена", fg=TEXT_MUTED)
+                    self.balance_label.config(text=f"{prefix}Вкладка не найдена", fg=TEXT_MUTED)
                 try:
                     self.root.after(0, _do)
                 except tk.TclError:

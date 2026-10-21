@@ -459,48 +459,49 @@ class HuEvoClicker:
             bg=BG, fg=TEXT_MUTED, font=FONT_TINY
         ).pack(side="left")
 
-        script_code = """// ==UserScript==
-// @name         HuEvo Clicker Full Sync
-// @namespace    http://tampermonkey.net/
-// @version      1.2
-// @match        https://huevo.su/clicker*
-// @grant        none
-// ==/UserScript==
-
-(function() {
-    'use strict';
-    let lastToast = '';
-    setInterval(() => {
-        const el = document.getElementById('ck-balance');
-        const toastEl = document.getElementById('hue-toast');
-        const dayEl = document.getElementById('ck-day');
-        const clicksEl = document.getElementById('ck-clicks');
-        const totalEl = document.getElementById('ck-total');
-        
-        const balanceText = el ? el.innerText : '';
-        const dayText = dayEl ? dayEl.innerText : '0';
-        const clicksText = clicksEl ? clicksEl.innerText : '0';
-        const totalText = totalEl ? totalEl.innerText : '0';
-        
-        let toastText = '';
-        if (toastEl && toastEl.style.display !== 'none' && toastEl.innerText) {
-            const currentToast = toastEl.innerText;
-            if (currentToast !== lastToast) {
-                toastText = currentToast;
-                lastToast = currentToast;
-            }
-        } else {
-            lastToast = '';
-        }
-
-        let url = `http://127.0.0.1:58321/update?balance=${encodeURIComponent(balanceText)}&day=${encodeURIComponent(dayText)}&clicks=${encodeURIComponent(clicksText)}&total=${encodeURIComponent(totalText)}`;
-        if (toastText) {
-            url += `&toast=${encodeURIComponent(toastText)}`;
-        }
-
-        fetch(url).catch(() => {});
-    }, 1000);
-})();"""
+        script_code = (
+            "// ==UserScript==\n"
+            "// @name         HuEvo Clicker Full Sync\n"
+            "// @namespace    http://tampermonkey.net/\n"
+            "// @version      1.2\n"
+            "// @match        https://huevo.su/clicker*\n"
+            "// @grant        none\n"
+            "// ==/UserScript==\n\n"
+            "(function() {\n"
+            "    'use strict';\n"
+            "    let lastToast = '';\n"
+            "    setInterval(() => {\n"
+            "        const el = document.getElementById('ck-balance');\n"
+            "        const toastEl = document.getElementById('hue-toast');\n"
+            "        const dayEl = document.getElementById('ck-day');\n"
+            "        const clicksEl = document.getElementById('ck-clicks');\n"
+            "        const totalEl = document.getElementById('ck-total');\n"
+            "        \n"
+            "        const balanceText = el ? el.innerText : '';\n"
+            "        const dayText = dayEl ? dayEl.innerText : '0';\n"
+            "        const clicksText = clicksEl ? clicksEl.innerText : '0';\n"
+            "        const totalText = totalEl ? totalEl.innerText : '0';\n"
+            "        \n"
+            "        let toastText = '';\n"
+            "        if (toastEl && toastEl.style.display !== 'none' && toastEl.innerText) {\n"
+            "            const currentToast = toastEl.innerText;\n"
+            "            if (currentToast !== lastToast) {\n"
+            "                toastText = currentToast;\n"
+            "                lastToast = currentToast;\n"
+            "            }\n"
+            "        } else {\n"
+            "            lastToast = '';\n"
+            "        }\n"
+            "\n"
+            "        let url = 'http://127.0.0.1:58321/update?balance=' + encodeURIComponent(balanceText) + '&day=' + encodeURIComponent(dayText) + '&clicks=' + encodeURIComponent(clicksText) + '&total=' + encodeURIComponent(totalText);\n"
+            "        if (toastText) {\n"
+            "            url += '&toast=' + encodeURIComponent(toastText);\n"
+            "        }\n"
+            "\n"
+            "        fetch(url).catch(() => {});\n"
+            "    }, 1000);\n"
+            "})();"
+        )
 
         copy_icon_btn = tk.Button(
             code_header, text="📋", 

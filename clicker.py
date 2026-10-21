@@ -16,7 +16,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
 try:
-    from PIL import Image, ImageTk, ImageEnhance, ImageOps
+    from PIL import Image, ImageTk, ImageEnhance, ImageOps, ImageDraw
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -129,10 +129,26 @@ def resource_path(relative_path):
 class HuEvoClicker:
     def __init__(self, root):
         self.root = root
-        self.root.overrideredirect(True)
         self.root.geometry("250x350")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
+
+        # Удаляем стандартную шапку Windows через WinAPI, сохраняя возможность сворачивания в таскбар
+        def apply_win32_style():
+            try:
+                hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+                if not hwnd:
+                    hwnd = root.winfo_id()
+                style = ctypes.windll.user32.GetWindowLongW(hwnd, -16)
+                style = style & ~0x00C00000  # WS_CAPTION
+                style = style & ~0x00040000  # WS_THICKFRAME
+                style = style | 0x00020000   # WS_MINIMIZEBOX
+                style = style | 0x00080000   # WS_SYSMENU
+                ctypes.windll.user32.SetWindowLongW(hwnd, -16, style)
+                ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0020)
+            except Exception:
+                pass
+        root.after(50, apply_win32_style)
 
         self.toast_anim_id = None
         self.tab_active = False
@@ -206,7 +222,7 @@ class HuEvoClicker:
     def _build_ui(self):
         root = self.root
 
-        # ---- Кастомная минималистичная шапка окна (с исправленным сворачиванием) ----
+        # ---- Кастомная минималистичная шапка окна ----
         self.title_bar = tk.Frame(root, bg=BG, height=28)
         self.title_bar.pack(fill="x", side="top")
         self.title_bar.pack_propagate(False)
@@ -271,7 +287,6 @@ class HuEvoClicker:
         )
         self.user_label.pack(side="right", padx=(0, 4), pady=6)
 
-        # Привязка событий наведения для расширения кнопки баланса вниз
         for widget in (self.balance_card, self.balance_left_frame, self.balance_right_frame, self.balance_label, self.user_label, self.avatar_label):
             widget.bind("<Enter>", self._on_card_enter)
             widget.bind("<Leave>", self._on_card_leave)
@@ -508,7 +523,7 @@ class HuEvoClicker:
         ).pack(anchor="w", padx=16, pady=(16, 4))
 
         info_text = (
-            "1. Установите расширение Tampermonkey в браузер.\n"
+            "1. Установите расширение Браузера Tampermonkey.\n"
             "2. Создайте новый скрипт и вставьте код ниже.\n"
             "3. Откройте вкладку huevo.su/clicker — баланс, аватар,\n"
             "   никнейм и статистика будут передаваться в кликер."
@@ -530,7 +545,7 @@ class HuEvoClicker:
             "// ==UserScript==\n"
             "// @name         HuEvo Clicker Full Sync\n"
             "// @namespace    http://tampermonkey.net/\n"
-            "// @version      1.3\n"
+            "// @version      1.4\n"
             "// @match        https://huevo.su/clicker*\n"
             "// @grant        none\n"
             "// ==/UserScript==\n\n"
@@ -551,7 +566,10 @@ class HuEvoClicker:
             "        const clicksText = clicksEl ? clicksEl.innerText : '0';\n"
             "        const totalText = totalEl ? totalEl.innerText : '0';\n"
             "        const userText = userEl ? userEl.innerText : '';\n"
-            "        const avUrl = avEl ? avEl.src : '';\n"
+            "        let avUrl = avEl ? avEl.src : '';\n"
+            "        if (avUrl && avUrl.startsWith('/')) {\n"
+            "            avUrl = window.location.origin + avUrl;\n"
+            "        }\n"
             "        \n"
             "        let toastText = '';\n"
             "        if (toastEl && toastEl.style.display !== 'none' && toastEl.innerText) {\n"
@@ -657,13 +675,15 @@ class HuEvoClicker:
             bal = int(re.sub(r"\D", "", bal_str))
             self.current_bal_text = f"{bal:,}".replace(",", " ")
             
-            # Обработка никнейма (первые 3 буквы + ...)
             short_user = ""
             if user_str:
                 clean_u = user_str.strip()
                 short_user = (clean_u[:3] + "...") if len(clean_u) > 3 else clean_u
 
-            # Загрузка аватара
+            # Если пришел относительный URL аватара — дополняем доменом
+            if av_url and av_url.startswith('/'):
+                av_url = "https://huevo.su" + av_url
+
             if av_url and av_url != self.last_avatar_url and PIL_AVAILABLE:
                 self.last_avatar_url = av_url
                 try:
@@ -673,9 +693,8 @@ class HuEvoClicker:
                         im = Image.open(io.BytesIO(img_data)).convert("RGBA")
                         im = im.resize((20, 20), Image.Resampling.LANCZOS)
                         
-                        # Делаем аватарку круглой
                         mask = Image.new('L', (20, 20), 0)
-                        draw = Image.Draw(mask)
+                        draw = ImageDraw.Draw(mask)
                         draw.ellipse((0, 0, 20, 20), fill=255)
                         im.putalpha(mask)
                         

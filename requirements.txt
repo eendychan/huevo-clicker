@@ -2,3 +2,4 @@ keyboard==0.13.5
 pyinstaller==6.6.0
 requests
 beautifulsoup4
+tkinterweb

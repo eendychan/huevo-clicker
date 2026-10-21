@@ -134,16 +134,16 @@ class HuEvoClicker:
 
         self.toast_anim_id = None
         self.tab_active = False
+        self.last_balance = None
         
         # Статистика из браузера
         self.stat_day = "0"
         self.stat_clicks = "0"
         self.stat_total = "0"
 
-        # Кэш картинок котика
-        self.cat_img_normal = None
-        self.cat_img_dim = None
+        # Кэш картинок котика и анимационных кадров
         self.cat_photo_normal = None
+        self.cat_photo_bounced = None
         self.cat_photo_dim = None
 
         cat_path = resource_path("cat.png")
@@ -155,12 +155,16 @@ class HuEvoClicker:
                 new_w = max(1, int(w * (new_h / h)))
                 pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 
-                self.cat_img_normal = pil_img
                 self.cat_photo_normal = ImageTk.PhotoImage(pil_img)
 
+                # Кадр для прыжка (с фиксированными размерами, чтобы интерфейс не дергался)
+                bounced_img = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+                bounced_img.paste(pil_img, (0, -2))
+                self.cat_photo_bounced = ImageTk.PhotoImage(bounced_img)
+
+                # Затемненная версия для неактивной вкладки
                 enhancer = ImageEnhance.Brightness(pil_img)
                 dimmed = enhancer.enhance(0.5)
-                self.cat_img_dim = dimmed
                 self.cat_photo_dim = ImageTk.PhotoImage(dimmed)
             except Exception:
                 pass
@@ -238,7 +242,7 @@ class HuEvoClicker:
         for widget in (self.balance_card, self.balance_label):
             widget.bind("<Button-1>", lambda e: self.open_sync_modal())
 
-        # ---- Скрытая область подробной статистики (Overlay) ----
+        # ---- Скрытая область подробной статистики (Overlay поверх всего) ----
         self.stats_overlay = tk.Frame(main_frame, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         self.stats_overlay_content = tk.Label(
             self.stats_overlay, text="", bg=SURFACE, fg=TEXT,
@@ -393,21 +397,19 @@ class HuEvoClicker:
                 f" Нарулил:  {self.stat_total}"
             )
             self.stats_overlay_content.config(text=text)
+            # Разворачиваем поверх остальных объектов и поднимаем наверх (Z-index)
             self.stats_overlay.place(x=12, y=55, relwidth=1, width=-24, height=135)
+            self.stats_overlay.lift()
 
     def _on_card_leave(self, event):
         self.stats_overlay.place_forget()
 
     def _trigger_cat_bounce(self):
-        if not PIL_AVAILABLE or not self.cat_img_normal:
+        if not self.cat_photo_bounced:
             return
         try:
-            w, h = self.cat_img_normal.size
-            bounced = self.cat_img_normal.resize((w + 4, h - 2), Image.Resampling.LANCZOS)
-            photo_b = ImageTk.PhotoImage(bounced)
-            self.balance_label.config(image=photo_b)
-            self.balance_label.image_ref = photo_b
-            self.root.after(120, self._restore_cat)
+            self.balance_label.config(image=self.cat_photo_bounced)
+            self.root.after(150, self._restore_cat)
         except Exception:
             pass
 
@@ -589,7 +591,11 @@ class HuEvoClicker:
                     text=f" {bal:,}".replace(",", " "), fg=TEXT,
                 )
                 self.balance_card.config(bg=SURFACE)
-                self._trigger_cat_bounce()
+
+                # Анимация прыжка кота только при изменении числа монеток
+                if self.last_balance is not None and bal != self.last_balance:
+                    self._trigger_cat_bounce()
+                self.last_balance = bal
             self.root.after(0, _do)
         except Exception:
             pass
@@ -599,6 +605,9 @@ class HuEvoClicker:
             if self.toast_anim_id:
                 self.root.after_cancel(self.toast_anim_id)
             
+            # При появлении тоаста о монетках также запускаем прыжок кота
+            self._trigger_cat_bounce()
+
             self.toast_label.config(text=toast_str, bg=GREEN_COL, fg="#ffffff")
             
             def step_in(p):
@@ -628,6 +637,7 @@ class HuEvoClicker:
             time.sleep(1)
             if self.last_update_time > 0 and (time.time() - self.last_update_time > 6):
                 self.tab_active = False
+                self.last_balance = None
                 def _do():
                     if self.cat_photo_dim:
                         self.balance_label.config(image=self.cat_photo_dim)

@@ -150,7 +150,6 @@ class HuEvoClicker:
         if os.path.exists(cat_path) and PIL_AVAILABLE:
             try:
                 pil_img = Image.open(cat_path).convert("RGBA")
-                # Уменьшаем до иконки высотой 16px
                 w, h = pil_img.size
                 new_h = 16
                 new_w = max(1, int(w * (new_h / h)))
@@ -159,7 +158,6 @@ class HuEvoClicker:
                 self.cat_img_normal = pil_img
                 self.cat_photo_normal = ImageTk.PhotoImage(pil_img)
 
-                # Создаем серую/прозрачную версию для неактивной вкладки
                 enhancer = ImageEnhance.Brightness(pil_img)
                 dimmed = enhancer.enhance(0.5)
                 self.cat_img_dim = dimmed
@@ -194,7 +192,6 @@ class HuEvoClicker:
         tk.Label(self.title_bar, text="huEVO clicker", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TITLE).pack(side="left", padx=10)
 
-        # Кнопки управления окном (закрыть, свернуть)
         close_btn = tk.Button(self.title_bar, text="✕", command=root.destroy,
                               bg=BG, fg=TEXT_MUTED, activebackground=RED_COL,
                               activeforeground="#fff", relief="flat", bd=0, font=FONT_TINY, width=3)
@@ -205,7 +202,6 @@ class HuEvoClicker:
                             activeforeground=TEXT, relief="flat", bd=0, font=FONT_TINY, width=3)
         min_btn.pack(side="right", fill="y")
 
-        # Перетаскивание за шапку
         def start_move(event):
             root.x = event.x
             root.y = event.y
@@ -216,7 +212,6 @@ class HuEvoClicker:
         self.title_bar.bind("<Button-1>", start_move)
         self.title_bar.bind("<B1-Motion>", do_move)
 
-        # Основной контейнер содержимого
         main_frame = tk.Frame(root, bg=BG)
         main_frame.pack(fill="both", expand=True, padx=12, pady=(2, 2))
 
@@ -236,7 +231,6 @@ class HuEvoClicker:
             self.balance_label.config(image=self.cat_photo_dim, compound="left")
         self.balance_label.pack()
 
-        # Ховер для разворачивания подробной статистики поверх объектов
         self.balance_card.bind("<Enter>", self._on_card_enter)
         self.balance_card.bind("<Leave>", self._on_card_leave)
         self.balance_label.bind("<Enter>", self._on_card_enter)
@@ -246,7 +240,6 @@ class HuEvoClicker:
 
         # ---- Скрытая область подробной статистики (Overlay) ----
         self.stats_overlay = tk.Frame(main_frame, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        # Располагаем под баланс-картой (перекрывает точки и таймер при наведении)
         self.stats_overlay_content = tk.Label(
             self.stats_overlay, text="", bg=SURFACE, fg=TEXT,
             font=("Consolas", 8), justify="left", padx=8, pady=6
@@ -342,14 +335,14 @@ class HuEvoClicker:
         )
         self.mode_btn.pack(fill="x", pady=(2, 2), ipady=1)
 
-        # ---- Статус («Заглох» / «Шуршит» без фона) ----
+        # ---- Статус ----
         self.pill = tk.Label(
             main_frame, text="Заглох", bg=BG, fg=RED_COL,
             font=("Segoe UI", 8, "bold"),
         )
         self.pill.pack(pady=(1, 1))
 
-        # ---- Старт (цвет #3c763d) ----
+        # ---- Старт ----
         self.start_btn = tk.Button(
             main_frame, text="▶  Старт (F6)", command=self.toggle_clicking,
             bg=GREEN_COL, fg="#fff",
@@ -359,7 +352,7 @@ class HuEvoClicker:
         )
         self.start_btn.pack(fill="x", pady=(0, 2), ipady=4)
 
-        # ---- Нижняя часть: Хоткеи, Проебать с радужной обводкой и Тоаст ----
+        # ---- Нижняя часть ----
         tk.Label(main_frame, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 1))
 
@@ -372,15 +365,12 @@ class HuEvoClicker:
         )
         self.proebat_btn.pack(fill="x", pady=(1, 0), ipady=1)
 
-        # Уведомление на самом нижнем краю
         self.toast_label = tk.Label(
             main_frame, text="", bg=BG, fg=BG,
             font=("Segoe UI", 8, "bold"), anchor="center", bd=0, pady=0
         )
         self.toast_label.pack(side="bottom", fill="x")
 
-    # ------------------------------------------------------
-    #  Анимация радужной обводки кнопки «Проебать»
     # ------------------------------------------------------
     def _start_rainbow_animation(self):
         self.rainbow_colors = ["#ef4444", "#f97316", "#eab308", "#10b981", "#06b6d4", "#6366f1", "#a855f7"]
@@ -395,9 +385,6 @@ class HuEvoClicker:
                 pass
         update_border()
 
-    # ------------------------------------------------------
-    #  Управление ховером подробной статистики
-    # ------------------------------------------------------
     def _on_card_enter(self, event):
         if self.tab_active:
             text = (
@@ -406,25 +393,20 @@ class HuEvoClicker:
                 f" Нарулил:  {self.stat_total}"
             )
             self.stats_overlay_content.config(text=text)
-            # Разворачиваем поверх области точек и таймера
             self.stats_overlay.place(x=12, y=55, relwidth=1, width=-24, height=135)
 
     def _on_card_leave(self, event):
         self.stats_overlay.place_forget()
 
-    # ------------------------------------------------------
-    #  Анимация bounce для иконки кота
-    # ------------------------------------------------------
     def _trigger_cat_bounce(self):
         if not PIL_AVAILABLE or not self.cat_img_normal:
             return
         try:
-            # Делаем быстрое покачивание путем изменения ширины/высоты на пару пикселей
             w, h = self.cat_img_normal.size
             bounced = self.cat_img_normal.resize((w + 4, h - 2), Image.Resampling.LANCZOS)
             photo_b = ImageTk.PhotoImage(bounced)
             self.balance_label.config(image=photo_b)
-            self.balance_label.image_ref = photo_b # сохраняем ссылку
+            self.balance_label.image_ref = photo_b
             self.root.after(120, self._restore_cat)
         except Exception:
             pass
@@ -433,7 +415,6 @@ class HuEvoClicker:
         if self.cat_photo_normal and self.tab_active:
             self.balance_label.config(image=self.cat_photo_normal)
 
-    # ------------------------------------------------------
     def toggle_timer_mode(self):
         if self.timer_mode == "fixed":
             self.timer_mode = "random"
@@ -446,9 +427,6 @@ class HuEvoClicker:
             self.fixed_container.pack(fill="x")
             self.mode_btn.config(text="таймер-клик", fg=TEXT_MUTED)
 
-    # ------------------------------------------------------
-    #  Модальное окно с инструкцией и скриптом Tampermonkey
-    # ------------------------------------------------------
     def open_sync_modal(self):
         modal = tk.Toplevel(self.root)
         modal.title("Синхронизация баланса")
@@ -563,9 +541,6 @@ class HuEvoClicker:
             btn.config(text="✓ Скопировано в буфер обмена", bg=GREEN_COL)
             self.root.after(2000, lambda: btn.config(text="Скопировать скрипт полностью", bg=ACCENT))
 
-    # ------------------------------------------------------
-    #  Локальный сервер для приема данных от браузера
-    # ------------------------------------------------------
     def _start_local_server(self):
         outer = self
         class LocalHandler(BaseHTTPRequestHandler):
@@ -614,14 +589,11 @@ class HuEvoClicker:
                     text=f" {bal:,}".replace(",", " "), fg=TEXT,
                 )
                 self.balance_card.config(bg=SURFACE)
-                
-                # Запускаем легкий bounce анимации кота при обновлении баланса
                 self._trigger_cat_bounce()
             self.root.after(0, _do)
         except Exception:
             pass
 
-    # Плавное выдвигание и задвигание уведомления
     def _show_toast(self, toast_str):
         def _do():
             if self.toast_anim_id:
@@ -666,7 +638,6 @@ class HuEvoClicker:
                 except tk.TclError:
                     break
 
-    # ------------------------------------------------------
     def add_point(self):
         x, y = get_cursor_pos()
         self.points.append((x, y))
@@ -696,7 +667,6 @@ class HuEvoClicker:
         if hi < lo: lo, hi = hi, lo
         return random.randint(lo, hi) / 1000.0
 
-    # ------------------------------------------------------
     def toggle_clicking(self):
         if self.is_running:
             self.is_running = False
@@ -714,7 +684,6 @@ class HuEvoClicker:
             self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
 
-    # ------------------------------------------------------
     def _loop(self):
         send_input = user32.SendInput
         send_input.argtypes = (wintypes.UINT,

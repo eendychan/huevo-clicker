@@ -135,12 +135,13 @@ class HuEvoClicker:
         self.toast_anim_id = None
         self.tab_active = False
         self.last_balance = None
+        self.current_bal_text = "0"
         
         self.stat_day = "0"
         self.stat_clicks = "0"
         self.stat_total = "0"
 
-        # Плавные кадры анимации кота (нормальный, масштаб, покачивания)
+        # Плавные кадры анимации кота (с фиксированным размером холста во избежание тряски)
         self.cat_frames = []
         self.cat_photo_dim = None
         self.cat_photo_normal = None
@@ -156,16 +157,24 @@ class HuEvoClicker:
                 
                 self.cat_photo_normal = ImageTk.PhotoImage(pil_img)
 
-                # Генерируем плавные кадры анимации
-                img_big = pil_img.resize((int(new_w * 1.2), int(new_h * 1.2)), Image.Resampling.LANCZOS)
-                img_tilt = pil_img.rotate(10, resample=Image.Resampling.BICUBIC, expand=False)
-                img_tilt2 = pil_img.rotate(-8, resample=Image.Resampling.BICUBIC, expand=False)
+                # Генерируем кадры с абсолютно одинаковым размером (new_w, new_h)
+                def make_frame(img_transformed):
+                    f = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+                    fw, fh = img_transformed.size
+                    px = (new_w - fw) // 2
+                    py = (new_h - fh) // 2
+                    f.paste(img_transformed, (px, py))
+                    return ImageTk.PhotoImage(f)
+
+                img_big = pil_img.resize((int(new_w * 1.15), int(new_h * 1.15)), Image.Resampling.LANCZOS)
+                img_tilt = pil_img.rotate(12, resample=Image.Resampling.BICUBIC, expand=False)
+                img_tilt2 = pil_img.rotate(-10, resample=Image.Resampling.BICUBIC, expand=False)
 
                 self.cat_frames = [
                     self.cat_photo_normal,
-                    ImageTk.PhotoImage(img_big),
-                    ImageTk.PhotoImage(img_tilt),
-                    ImageTk.PhotoImage(img_tilt2),
+                    make_frame(img_big),
+                    make_frame(img_tilt),
+                    make_frame(img_tilt2),
                     self.cat_photo_normal
                 ]
 
@@ -229,32 +238,52 @@ class HuEvoClicker:
         self.balance_card = tk.Frame(
             main_frame, bg=SURFACE, 
             highlightbackground=BORDER, highlightthickness=1,
-            cursor="hand2"
+            cursor="hand2", height=32
         )
         self.balance_card.pack(fill="x", pady=(2, 3))
+        self.balance_card.pack_propagate(False)
 
         self.balance_label = tk.Label(
             self.balance_card, text="  Ожидание вкладки...", bg=SURFACE, fg=TEXT_MUTED,
-            font=("Consolas", 9, "bold"), pady=5
+            font=("Consolas", 9, "bold")
         )
         if self.cat_photo_dim:
             self.balance_label.config(image=self.cat_photo_dim, compound="left")
-        self.balance_label.pack()
+        self.balance_label.pack(side="left", padx=6, pady=5)
 
-        self.balance_card.bind("<Enter>", self._on_card_enter)
-        self.balance_card.bind("<Leave>", self._on_card_leave)
-        self.balance_label.bind("<Enter>", self._on_card_enter)
-        self.balance_label.bind("<Leave>", self._on_card_leave)
+        # Привязка событий наведения для расширения кнопки баланса вниз
         for widget in (self.balance_card, self.balance_label):
+            widget.bind("<Enter>", self._on_card_enter)
+            widget.bind("<Leave>", self._on_card_leave)
             widget.bind("<Button-1>", lambda e: self.open_sync_modal())
 
-        # ---- Компактная область подробной статистики (продолжение кнопки баланса) ----
-        self.stats_overlay = tk.Frame(main_frame, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        self.stats_overlay_content = tk.Label(
-            self.stats_overlay, text="", bg=SURFACE, fg=TEXT,
-            font=("Consolas", 8), justify="left", anchor="w", padx=8, pady=4
+        # ---- Расширяющаяся часть кнопки баланса (overlay продолжение) ----
+        self.expanded_card = tk.Frame(
+            main_frame, bg=SURFACE,
+            highlightbackground=BORDER, highlightthickness=1,
+            cursor="hand2"
         )
-        self.stats_overlay_content.pack(fill="both", expand=True, anchor="w")
+        for w in (self.expanded_card,):
+            w.bind("<Enter>", self._on_card_enter)
+            w.bind("<Leave>", self._on_card_leave)
+            w.bind("<Button-1>", lambda e: self.open_sync_modal())
+
+        # Внутренности расширенной кнопки баланса (левые метки, правые значения без двоеточий)
+        exp_inner = tk.Frame(self.expanded_card, bg=SURFACE)
+        exp_inner.pack(fill="both", expand=True, padx=8, pady=4)
+
+        def make_stat_row(parent, label_text):
+            f = tk.Frame(parent, bg=SURFACE)
+            f.pack(fill="x", pady=1)
+            lbl = tk.Label(f, text=label_text, bg=SURFACE, fg=TEXT_MUTED, font=("Consolas", 8), anchor="w")
+            lbl.pack(side="left")
+            val = tk.Label(f, text="0", bg=SURFACE, fg=TEXT, font=("Consolas", 8, "bold"), anchor="e")
+            val.pack(side="right")
+            return val
+
+        self.exp_day_val = make_stat_row(exp_inner, "Седня")
+        self.exp_clicks_val = make_stat_row(exp_inner, "Кликов")
+        self.exp_total_val = make_stat_row(exp_inner, "Нарулил")
 
         # ---- Точки ----
         tk.Button(
@@ -366,14 +395,17 @@ class HuEvoClicker:
         tk.Label(main_frame, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 1))
 
+        # Контейнер для тонкой радужной обводки кнопки «Проебать»
+        self.proebat_wrapper = tk.Frame(main_frame, bg=RED_COL, bd=0)
+        self.proebat_wrapper.pack(fill="x", pady=(1, 0))
+
         self.proebat_btn = tk.Button(
-            main_frame, text="Проебать", command=lambda: webbrowser.open("https://huevo.su/apps/1"),
+            self.proebat_wrapper, text="Проебать", command=lambda: webbrowser.open("https://huevo.su/apps/1"),
             bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
-            activeforeground=TEXT, relief="flat", bd=1,
-            font=FONT_TINY, cursor="hand2", highlightthickness=1,
-            highlightbackground=RED_COL,
+            activeforeground=TEXT, relief="flat", bd=0,
+            font=FONT_TINY, cursor="hand2", highlightthickness=0,
         )
-        self.proebat_btn.pack(fill="x", pady=(1, 0), ipady=1)
+        self.proebat_btn.pack(fill="x", padx=1, pady=1)
 
         self.toast_label = tk.Label(
             main_frame, text="", bg=BG, fg=BG,
@@ -389,26 +421,37 @@ class HuEvoClicker:
             try:
                 col = self.rainbow_colors[self.rainbow_idx]
                 self.rainbow_idx = (self.rainbow_idx + 1) % len(self.rainbow_colors)
-                self.proebat_btn.config(highlightbackground=col)
+                self.proebat_wrapper.config(bg=col)
                 self.root.after(200, update_border)
             except Exception:
                 pass
         update_border()
 
-    def _on_card_enter(self, event):
+    def _on_card_enter(self, event=None):
         if self.tab_active:
-            text = (
-                f"Седня {self.stat_day}/90k\n"
-                f"Кликов {self.stat_clicks}\n"
-                f"Нарулил {self.stat_total}"
-            )
-            self.stats_overlay_content.config(text=text)
-            # Компактный блок выплывает прямо под плашкой баланса (высота всего 46 пикселей)
-            self.stats_overlay.place(x=12, y=34, relwidth=1, width=-24, height=46)
-            self.stats_overlay.lift()
+            self.exp_day_val.config(text=f"{self.stat_day}/90k")
+            self.exp_clicks_val.config(text=self.stat_clicks)
+            self.exp_total_val.config(text=self.stat_total)
+            
+            # Раскрываем плашку баланса вниз поверх интерфейса
+            self.expanded_card.place(x=12, y=32, relwidth=1, width=-24, height=72)
+            self.expanded_card.lift()
 
-    def _on_card_leave(self, event):
-        self.stats_overlay.place_forget()
+    def _on_card_leave(self, event=None):
+        self.root.after(100, self._check_leave)
+
+    def _check_leave(self):
+        try:
+            rx = self.root.winfo_pointerx()
+            ry = self.root.winfo_pointery()
+            bx = self.balance_card.winfo_rootx()
+            by = self.balance_card.winfo_rooty()
+            bw = self.balance_card.winfo_width()
+            
+            if not (bx <= rx <= bx + bw and by <= ry <= by + 104):
+                self.expanded_card.place_forget()
+        except Exception:
+            pass
 
     def _trigger_cat_bounce(self):
         if not self.cat_frames:
@@ -416,7 +459,7 @@ class HuEvoClicker:
         def play_frame(idx):
             if idx < len(self.cat_frames):
                 self.balance_label.config(image=self.cat_frames[idx])
-                self.root.after(40, lambda: play_frame(idx + 1))
+                self.root.after(35, lambda: play_frame(idx + 1))
             else:
                 if self.tab_active and self.cat_photo_normal:
                     self.balance_label.config(image=self.cat_photo_normal)
@@ -588,16 +631,16 @@ class HuEvoClicker:
         
         try:
             bal = int(re.sub(r"\D", "", bal_str))
+            self.current_bal_text = f"{bal:,}".replace(",", " ")
             def _do():
                 if is_first_active and self.cat_photo_normal:
                     self.balance_label.config(image=self.cat_photo_normal)
                 
                 self.balance_label.config(
-                    text=f" {bal:,}".replace(",", " "), fg=TEXT,
+                    text=f" {self.current_bal_text}", fg=TEXT,
                 )
                 self.balance_card.config(bg=SURFACE)
 
-                # Запускаем плавную анимацию кота строго при изменении баланса
                 if self.last_balance is not None and bal != self.last_balance:
                     self._trigger_cat_bounce()
                 self.last_balance = bal
@@ -645,7 +688,7 @@ class HuEvoClicker:
                     if self.cat_photo_dim:
                         self.balance_label.config(image=self.cat_photo_dim)
                     self.balance_label.config(text=" Вкладка не найдена", fg=TEXT_MUTED)
-                    self.stats_overlay.place_forget()
+                    self.expanded_card.place_forget()
                 try:
                     self.root.after(0, _do)
                 except tk.TclError:

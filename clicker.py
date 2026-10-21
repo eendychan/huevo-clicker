@@ -99,6 +99,7 @@ ACCENT_HOV = "#4f46e5"
 GREEN      = "#10b981"
 RED        = "#ef4444"
 YELLOW     = "#f59e0b"
+TOAST_BG   = "#3c763d"  # Фирменный зеленый цвет уведомлений с сайта
 
 FONT_TITLE = ("Segoe UI", 10, "bold")
 FONT_BODY  = ("Segoe UI", 9)
@@ -122,10 +123,13 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("250x370")
+        self.root.geometry("250x400")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
+
+        self.toast_timer = None
+        self.last_toast_str = ""
 
         # Загрузка иконки котика (для плашки баланса и иконки окна)
         cat_path = resource_path("cat.png")
@@ -133,7 +137,6 @@ class HuEvoClicker:
         if os.path.exists(cat_path):
             try:
                 raw_cat = tk.PhotoImage(file=cat_path)
-                # Устанавливаем иконку на само окно приложения
                 self.root.iconphoto(True, raw_cat)
                 
                 h = raw_cat.height()
@@ -156,7 +159,7 @@ class HuEvoClicker:
         keyboard.add_hotkey('F2', self.add_point)
         keyboard.add_hotkey('F6', self.toggle_clicking)
 
-        # Запускаем локальный HTTP-сервер для синхронизации баланса
+        # Запускаем локальный HTTP-сервер для синхронизации баланса и тоастов
         threading.Thread(target=self._start_local_server, daemon=True).start()
         threading.Thread(target=self._connection_checker, daemon=True).start()
 
@@ -295,7 +298,7 @@ class HuEvoClicker:
             root, text="●  Выкл", bg=RED, fg="#fff",
             font=("Segoe UI", 8, "bold"), padx=6, pady=1,
         )
-        self.pill.pack(pady=(2, 3))
+        self.pill.pack(pady=(2, 2))
 
         # ---- Старт ----
         self.start_btn = tk.Button(
@@ -306,6 +309,13 @@ class HuEvoClicker:
             font=("Segoe UI", 9, "bold"),
         )
         self.start_btn.pack(fill="x", padx=12, pady=(0, 2), ipady=5)
+
+        # ---- Поле для всплывающих уведомлений (тоастов) под кнопкой старт ----
+        self.toast_label = tk.Label(
+            root, text="", bg=BG, fg=TEXT_MUTED,
+            font=("Segoe UI", 8, "bold"), wraplength=220, justify="center", bd=0
+        )
+        self.toast_label.pack(fill="x", padx=12, pady=(2, 2))
 
         tk.Label(root, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 2))
@@ -331,7 +341,7 @@ class HuEvoClicker:
     def open_sync_modal(self):
         modal = tk.Toplevel(self.root)
         modal.title("Синхронизация баланса")
-        modal.geometry("380x440")
+        modal.geometry("380x450")
         modal.configure(bg=BG)
         modal.attributes("-topmost", True)
         modal.resizable(False, False)
@@ -344,36 +354,73 @@ class HuEvoClicker:
         info_text = (
             "1. Установите расширение Tampermonkey в браузер.\n"
             "2. Создайте новый скрипт и вставьте код ниже.\n"
-            "3. Откройте вкладку huevo.su/clicker — баланс\n"
-            "   будет автоматически передаваться в кликер."
+            "3. Откройте вкладку huevo.su/clicker — баланс и\n"
+            "   уведомления будут передаваться в кликер."
         )
         tk.Label(
             modal, text=info_text, bg=BG, fg=TEXT_MUTED,
             font=FONT_TINY, justify="left"
-        ).pack(anchor="w", padx=16, pady=(0, 10))
+        ).pack(anchor="w", padx=16, pady=(0, 8))
+
+        # Шапка для кода скрипта с кнопкой быстрого копирования (иконка)
+        code_header = tk.Frame(modal, bg=BG)
+        code_header.pack(fill="x", padx=16, pady=(0, 2))
+
+        tk.Label(
+            code_header, text="Код скрипта Tampermonkey:",
+            bg=BG, fg=TEXT_MUTED, font=FONT_TINY
+        ).pack(side="left")
 
         script_code = (
             "// ==UserScript==\n"
-            "// @name         HuEvo Clicker Balance Sync\n"
+            "// @name         HuEvo Clicker Balance & Toast Sync\n"
             "// @namespace    http://tampermonkey.net/\n"
-            "// @version      1.0\n"
+            "// @version      1.1\n"
             "// @match        https://huevo.su/clicker*\n"
             "// @grant        none\n"
             "// ==/UserScript==\n\n"
             "(function() {\n"
             "    'use strict';\n"
+            "    let lastToast = '';\n"
             "    setInterval(() => {\n"
             "        const el = document.getElementById('ck-balance');\n"
-            "        if (el) {\n"
-            "            fetch(`http://127.0.0.1:58321/update?balance=${encodeURIComponent(el.innerText)}`)\n"
-            "                .catch(() => {});\n"
+            "        const toastEl = document.getElementById('hue-toast');\n"
+            "        \n"
+            "        const balanceText = el ? el.innerText : '';\n"
+            "        let toastText = '';\n"
+            "        \n"
+            "        if (toastEl && toastEl.style.display !== 'none' && toastEl.innerText) {\n"
+            "            const currentToast = toastEl.innerText;\n"
+            "            if (currentToast !== lastToast) {\n"
+            "                toastText = currentToast;\n"
+            "                lastToast = currentToast;\n"
+            "            }\n"
+            "        } else {\n"
+            "            lastToast = '';\n"
             "        }\n"
-            "    }, 1500);\n"
+            "\n"
+            "        let url = `http://127.0.0.1:58321/update?balance=${encodeURIComponent(balanceText)}`;\n"
+            "        if (toastText) {\n"
+            "            url += `&toast=${encodeURIComponent(toastText)}`;\n"
+            "        }\n"
+            "\n"
+            "        fetch(url).catch(() => {});\n"
+            "    }, 1000);\n"
             "})();"
         )
 
+        # Квадратная маленькая кнопка с иконкой копирования
+        copy_icon_btn = tk.Button(
+            code_header, text="📋", 
+            command=lambda: self._copy_to_clipboard(script_code, copy_icon_btn, is_icon=True),
+            bg=SURFACE, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+            relief="flat", bd=0, font=("Segoe UI", 9), cursor="hand2",
+            width=3, highlightthickness=1, highlightbackground=BORDER
+        )
+        copy_icon_btn.pack(side="right")
+
         text_frame = tk.Frame(modal, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        text_frame.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        text_frame.pack(fill="both", expand=True, padx=16, pady=(4, 10))
 
         script_box = tk.Text(
             text_frame, bg=SURFACE, fg=TEXT, insertbackground=TEXT,
@@ -383,19 +430,24 @@ class HuEvoClicker:
         script_box.insert("1.0", script_code)
         script_box.config(state="disabled")
 
+        # Дополнительная кнопка копирования внизу
         copy_btn = tk.Button(
-            modal, text="Скопировать скрипт", 
-            command=lambda: self._copy_to_clipboard(script_code, copy_btn),
+            modal, text="Скопировать скрипт полностью", 
+            command=lambda: self._copy_to_clipboard(script_code, copy_btn, is_icon=False),
             bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2"
         )
         copy_btn.pack(fill="x", padx=16, pady=(0, 16), ipady=6)
 
-    def _copy_to_clipboard(self, text, btn):
+    def _copy_to_clipboard(self, text, btn, is_icon=False):
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        btn.config(text="✓ Скопировано в буфер обмена", bg=GREEN)
-        self.root.after(2000, lambda: btn.config(text="Скопировать скрипт", bg=ACCENT))
+        if is_icon:
+            btn.config(text="✓", bg=GREEN, fg="#fff")
+            self.root.after(2000, lambda: btn.config(text="📋", bg=SURFACE, fg=TEXT))
+        else:
+            btn.config(text="✓ Скопировано в буфер обмена", bg=GREEN)
+            self.root.after(2000, lambda: btn.config(text="Скопировать скрипт полностью", bg=ACCENT))
 
     # ------------------------------------------------------
     #  Локальный сервер для приема данных от браузера
@@ -407,9 +459,13 @@ class HuEvoClicker:
                 parsed = urllib.parse.urlparse(self.path)
                 if parsed.path == "/update":
                     query = urllib.parse.parse_qs(parsed.query)
-                    if "balance" in query:
-                        bal_str = query["balance"][0]
+                    bal_str = query.get("balance", [""])[0]
+                    toast_str = query.get("toast", [""])[0]
+                    
+                    if bal_str:
                         outer._update_balance_from_web(bal_str)
+                    if toast_str:
+                        outer._show_toast(toast_str)
                 
                 self.send_response(200)
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -440,6 +496,25 @@ class HuEvoClicker:
             self.root.after(0, _do)
         except Exception:
             pass
+
+    def _show_toast(self, toast_str):
+        def _do():
+            if self.toast_timer:
+                self.root.after_cancel(self.toast_timer)
+            
+            self.toast_label.config(
+                text=toast_str, bg=TOAST_BG, fg="#ffffff", padx=8, pady=4
+            )
+            # Уведомление висит 6 секунд, после чего плавно скрывается
+            self.toast_timer = self.root.after(6000, self._clear_toast)
+        try:
+            self.root.after(0, _do)
+        except tk.TclError:
+            pass
+
+    def _clear_toast(self):
+        self.toast_label.config(text="", bg=BG, fg=TEXT_MUTED, padx=0, pady=0)
+        self.toast_timer = None
 
     def _connection_checker(self):
         while True:

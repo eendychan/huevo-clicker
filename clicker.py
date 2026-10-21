@@ -88,21 +88,28 @@ _SCREEN_H = user32.GetSystemMetrics(1)
 # ==========================================================
 #  Современная палитра (Минимализм / Без неона)
 # ==========================================================
-BG         = "#121214"  # Глубокий матовый фон
-SURFACE    = "#1a1b1e"  # Карточки и элементы
-SURFACE_HOV= "#222327"  # Эффект при наведении
-BORDER     = "#2c2d32"  # Строгие тонкие границы
-TEXT       = "#f4f4f5"  # Основной белый текст
-TEXT_MUTED = "#71717a"  # Второстепенный серый текст
-ACCENT     = "#6366f1"  # Строгий чистый акцент (Indigo)
-ACCENT_HOV = "#4f46e5"  # Ховер акцента
-GREEN      = "#10b981"  # Статус активности
-RED        = "#ef4444"  # Статус выключения / ошибки
+BG         = "#121214"
+SURFACE    = "#1a1b1e"
+SURFACE_HOV= "#222327"
+BORDER     = "#2c2d32"
+TEXT       = "#f4f4f5"
+TEXT_MUTED = "#71717a"
+ACCENT     = "#6366f1"
+ACCENT_HOV = "#4f46e5"
+GREEN      = "#10b981"
+RED        = "#ef4444"
+YELLOW     = "#f59e0b"
 
 FONT_TITLE = ("Segoe UI", 10, "bold")
 FONT_BODY  = ("Segoe UI", 9)
 FONT_MONO  = ("Consolas", 9)
 FONT_TINY  = ("Segoe UI", 8)
+
+
+def _app_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 # ==========================================================
@@ -112,10 +119,34 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("250x430")
+        self.root.geometry("250x370")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
+
+        # Установка иконки приложения (icon.png)
+        icon_path = os.path.join(_app_dir(), "icon.png")
+        if os.path.exists(icon_path):
+            try:
+                self.app_icon = tk.PhotoImage(file=icon_path)
+                self.root.iconphoto(True, self.app_icon)
+            except Exception:
+                pass
+
+        # Загрузка иконки котика для баланса (cat.png)
+        cat_path = os.path.join(_app_dir(), "cat.png")
+        self.cat_img = None
+        if os.path.exists(cat_path):
+            try:
+                raw_cat = tk.PhotoImage(file=cat_path)
+                h = raw_cat.height()
+                if h > 16:
+                    factor = max(1, h // 16)
+                    self.cat_img = raw_cat.subsample(factor, factor)
+                else:
+                    self.cat_img = raw_cat
+            except Exception:
+                pass
 
         self.points = []
         self.is_running = False
@@ -136,26 +167,31 @@ class HuEvoClicker:
     def _build_ui(self):
         root = self.root
 
-        # Шапка
+        # Шапка (центрированный заголовок без значка)
         header = tk.Frame(root, bg=BG)
-        header.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Label(header, text="◆", bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
+        header.pack(fill="x", padx=12, pady=(8, 2))
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
-                 font=FONT_TITLE).pack(side="left")
+                 font=FONT_TITLE).pack(anchor="center")
 
-        # ---- Интерактивная плашка баланса (Кликабельная карточка) ----
+        # ---- Интерактивная плашка баланса (с cat.png) ----
         self.balance_card = tk.Frame(
             root, bg=SURFACE, 
             highlightbackground=BORDER, highlightthickness=1,
             cursor="hand2"
         )
-        self.balance_card.pack(fill="x", padx=12, pady=(4, 6))
+        self.balance_card.pack(fill="x", padx=12, pady=(2, 4))
 
-        self.balance_label = tk.Label(
-            self.balance_card, text="💰 Ожидание вкладки...", bg=SURFACE, fg=TEXT_MUTED,
-            font=("Consolas", 9, "bold"), pady=8
-        )
+        lbl_args = {
+            "bg": SURFACE,
+            "fg": TEXT_MUTED,
+            "font": ("Consolas", 9, "bold"),
+            "pady": 6
+        }
+        if self.cat_img:
+            lbl_args["image"] = self.cat_img
+            lbl_args["compound"] = "left"
+            
+        self.balance_label = tk.Label(self.balance_card, text="  💰 Ожидание вкладки...", **lbl_args)
         self.balance_label.pack()
 
         # События клика и наведения для карточки баланса
@@ -172,34 +208,39 @@ class HuEvoClicker:
             activeforeground=TEXT, relief="flat", bd=0,
             font=FONT_BODY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
-        ).pack(fill="x", padx=12, pady=(2, 4), ipady=4)
+        ).pack(fill="x", padx=12, pady=(2, 3), ipady=3)
 
         list_wrap = tk.Frame(root, bg=SURFACE,
                              highlightbackground=BORDER, highlightthickness=1)
         list_wrap.pack(fill="x", padx=12)
 
         self.listbox = tk.Listbox(
-            list_wrap, height=4, bg=SURFACE, fg=TEXT,
+            list_wrap, height=3, bg=SURFACE, fg=TEXT,
             selectbackground=ACCENT, selectforeground="#fff",
             bd=0, highlightthickness=0, font=FONT_MONO, activestyle="none",
         )
-        self.listbox.pack(fill="x", padx=4, pady=4)
+        self.listbox.pack(fill="x", padx=4, pady=3)
 
         tk.Button(
-            root, text="✕  Очистить точки", command=self.clear_points,
+            root, text="✕  Очистить", command=self.clear_points,
             bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
             activeforeground=TEXT, relief="flat", bd=0,
             font=FONT_TINY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
-        ).pack(fill="x", padx=12, pady=(4, 0), ipady=2)
+        ).pack(fill="x", padx=12, pady=(2, 0), ipady=1)
 
-        # ---- Интервал + переключатель ----
-        tf = tk.Frame(root, bg=BG)
-        tf.pack(fill="x", padx=12, pady=(6, 2))
+        # ---- Параметры таймера (центрированные контейнеры) ----
+        self.params_parent = tk.Frame(root, bg=BG)
+        self.params_parent.pack(fill="x", padx=12, pady=(4, 1))
 
+        # 1. Фиксированный режим (м, с, мс)
+        self.fixed_container = tk.Frame(self.params_parent, bg=BG)
         self.min_var = tk.StringVar(value="0")
         self.sec_var = tk.StringVar(value="0")
         self.ms_var  = tk.StringVar(value="50")
+
+        fixed_inner = tk.Frame(self.fixed_container, bg=BG)
+        fixed_inner.pack(anchor="center")
 
         def entry(parent, var, width=3):
             e = tk.Entry(parent, textvariable=var, width=width, justify="center",
@@ -210,20 +251,20 @@ class HuEvoClicker:
             e.pack(side="left", ipady=2, padx=(0, 2))
             return e
 
-        entry(tf, self.min_var)
-        tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
-        entry(tf, self.sec_var)
-        tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
-        entry(tf, self.ms_var)
-        tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 6))
+        entry(fixed_inner, self.min_var)
+        tk.Label(fixed_inner, text="м", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
+        entry(fixed_inner, self.sec_var)
+        tk.Label(fixed_inner, text="с", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
+        entry(fixed_inner, self.ms_var)
+        tk.Label(fixed_inner, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 0))
 
-        self.mode_switch = self._make_switch(tf)
-        self.mode_switch.pack(side="left")
-
-        # ---- Рандом ----
-        self.rand_frame = tk.Frame(root, bg=BG)
+        # 2. Рандомный режим (от, до мс)
+        self.rand_container = tk.Frame(self.params_parent, bg=BG)
         self.rand_min_var = tk.StringVar(value="30")
         self.rand_max_var = tk.StringVar(value="120")
+
+        rand_inner = tk.Frame(self.rand_container, bg=BG)
+        rand_inner.pack(anchor="center")
 
         def rentry(parent, var):
             e = tk.Entry(parent, textvariable=var, width=5, justify="center",
@@ -234,18 +275,31 @@ class HuEvoClicker:
             e.pack(side="left", ipady=2, padx=(0, 2))
             return e
 
-        tk.Label(self.rand_frame, text="от", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 2))
-        rentry(self.rand_frame, self.rand_min_var)
-        tk.Label(self.rand_frame, text="до", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(4, 2))
-        rentry(self.rand_frame, self.rand_max_var)
-        tk.Label(self.rand_frame, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(2, 0))
+        tk.Label(rand_inner, text="от", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 2))
+        rentry(rand_inner, self.rand_min_var)
+        tk.Label(rand_inner, text="до", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(4, 2))
+        rentry(rand_inner, self.rand_max_var)
+        tk.Label(rand_inner, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(2, 0))
+
+        # По умолчанию отображаем фиксированный контейнер
+        self.fixed_container.pack(fill="x")
+
+        # Единая кнопка переключения режимов под параметрами
+        self.mode_btn = tk.Button(
+            root, text="таймер-клик", command=self.toggle_timer_mode,
+            bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
+            activeforeground=TEXT, relief="flat", bd=0,
+            font=FONT_TINY, cursor="hand2", highlightthickness=1,
+            highlightbackground=BORDER,
+        )
+        self.mode_btn.pack(fill="x", padx=12, pady=(2, 3), ipady=2)
 
         # ---- Статус ----
         self.pill = tk.Label(
             root, text="●  Выкл", bg=RED, fg="#fff",
-            font=("Segoe UI", 8, "bold"), padx=8, pady=2,
+            font=("Segoe UI", 8, "bold"), padx=6, pady=1,
         )
-        self.pill.pack(pady=(6, 4))
+        self.pill.pack(pady=(2, 3))
 
         # ---- Старт ----
         self.start_btn = tk.Button(
@@ -255,10 +309,25 @@ class HuEvoClicker:
             relief="flat", bd=0, cursor="hand2",
             font=("Segoe UI", 9, "bold"),
         )
-        self.start_btn.pack(fill="x", padx=12, pady=(0, 6), ipady=6)
+        self.start_btn.pack(fill="x", padx=12, pady=(0, 2), ipady=5)
 
         tk.Label(root, text="F2 — точка · F6 — старт/стоп",
-                 bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
+                 bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 2))
+
+    # ------------------------------------------------------
+    #  Переключение режимов единой кнопкой
+    # ------------------------------------------------------
+    def toggle_timer_mode(self):
+        if self.timer_mode == "fixed":
+            self.timer_mode = "random"
+            self.fixed_container.pack_forget()
+            self.rand_container.pack(fill="x")
+            self.mode_btn.config(text="инт. клика", fg=TEXT)
+        else:
+            self.timer_mode = "fixed"
+            self.rand_container.pack_forget()
+            self.fixed_container.pack(fill="x")
+            self.mode_btn.config(text="таймер-клик", fg=TEXT_MUTED)
 
     # ------------------------------------------------------
     #  Модальное окно с инструкцией и скриптом Tampermonkey
@@ -287,7 +356,6 @@ class HuEvoClicker:
             font=FONT_TINY, justify="left"
         ).pack(anchor="w", padx=16, pady=(0, 10))
 
-        # Поле со скриптом
         script_code = (
             "// ==UserScript==\n"
             "// @name         HuEvo Clicker Balance Sync\n"
@@ -317,9 +385,8 @@ class HuEvoClicker:
         )
         script_box.pack(side="left", fill="both", expand=True, padx=6, pady=6)
         script_box.insert("1.0", script_code)
-        script_box.config(state="disabled") # Только для чтения
+        script_box.config(state="disabled")
 
-        # Кнопка копирования
         copy_btn = tk.Button(
             modal, text="Скопировать скрипт", 
             command=lambda: self._copy_to_clipboard(script_code, copy_btn),
@@ -367,8 +434,11 @@ class HuEvoClicker:
         try:
             bal = int(re.sub(r"\D", "", bal_str))
             def _do():
+                prefix = "  "
+                if self.cat_img:
+                    prefix = " "
                 self.balance_label.config(
-                    text=f"💰 {bal:,}".replace(",", " "), fg=TEXT,
+                    text=f"{prefix}💰 {bal:,}".replace(",", " "), fg=TEXT,
                 )
                 self.balance_card.config(bg=SURFACE)
             self.root.after(0, _do)
@@ -380,37 +450,14 @@ class HuEvoClicker:
             time.sleep(1)
             if self.last_update_time > 0 and (time.time() - self.last_update_time > 6):
                 def _do():
-                    self.balance_label.config(text="💰 Вкладка не найдена", fg=TEXT_MUTED)
+                    prefix = "  "
+                    if self.cat_img:
+                        prefix = " "
+                    self.balance_label.config(text=f"{prefix}💰 Вкладка не найдена", fg=TEXT_MUTED)
                 try:
                     self.root.after(0, _do)
                 except tk.TclError:
                     break
-
-    # ------------------------------------------------------
-    #  Переключатель Фикс / Рандом
-    # ------------------------------------------------------
-    def _make_switch(self, parent):
-        wrap = tk.Frame(parent, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-
-        self.sw_fixed  = tk.Label(wrap, text="Ф", bg=ACCENT, fg="#fff", font=("Segoe UI", 8, "bold"), width=2, cursor="hand2")
-        self.sw_random = tk.Label(wrap, text="Р", bg=SURFACE, fg=TEXT_MUTED, font=("Segoe UI", 8, "bold"), width=2, cursor="hand2")
-        self.sw_fixed.pack(side="left")
-        self.sw_random.pack(side="left")
-
-        self.sw_fixed.bind("<Button-1>",  lambda e: self._set_timer_mode("fixed"))
-        self.sw_random.bind("<Button-1>", lambda e: self._set_timer_mode("random"))
-        return wrap
-
-    def _set_timer_mode(self, mode):
-        self.timer_mode = mode
-        if mode == "fixed":
-            self.sw_fixed.config(bg=ACCENT, fg="#fff")
-            self.sw_random.config(bg=SURFACE, fg=TEXT_MUTED)
-            self.rand_frame.pack_forget()
-        else:
-            self.sw_fixed.config(bg=SURFACE, fg=TEXT_MUTED)
-            self.sw_random.config(bg=ACCENT, fg="#fff")
-            self.rand_frame.pack(fill="x", padx=12, pady=(2, 0), before=self.pill)
 
     # ------------------------------------------------------
     def add_point(self):
@@ -451,7 +498,7 @@ class HuEvoClicker:
                 text="▶  Старт (F6)", bg=ACCENT, activebackground=ACCENT_HOV))
         else:
             if not self.points:
-                self.root.after(0, lambda: self.pill.config(text="⚠  нет точек", bg=YELLOW if 'YELLOW' in globals() else "#f59e0b"))
+                self.root.after(0, lambda: self.pill.config(text="⚠  нет точек", bg=YELLOW))
                 return
             self.is_running = True
             self.root.after(0, lambda: self.pill.config(text="●  Работа", bg=GREEN))

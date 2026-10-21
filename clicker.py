@@ -106,10 +106,13 @@ FONT_MONO  = ("Consolas", 9)
 FONT_TINY  = ("Segoe UI", 8)
 
 
-def _app_dir():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+def resource_path(relative_path):
+    """ Получает путь к файлу как для обычного скрипта, так и для упакованного EXE """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
 
 
 # ==========================================================
@@ -124,17 +127,8 @@ class HuEvoClicker:
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        # Установка иконки приложения (icon.png)
-        icon_path = os.path.join(_app_dir(), "icon.png")
-        if os.path.exists(icon_path):
-            try:
-                self.app_icon = tk.PhotoImage(file=icon_path)
-                self.root.iconphoto(True, self.app_icon)
-            except Exception:
-                pass
-
-        # Загрузка иконки котика для баланса (cat.png)
-        cat_path = os.path.join(_app_dir(), "cat.png")
+        # Загрузка иконки котика (из папки или из скомпилированного EXE)
+        cat_path = resource_path("cat.png")
         self.cat_img = None
         if os.path.exists(cat_path):
             try:
@@ -167,13 +161,13 @@ class HuEvoClicker:
     def _build_ui(self):
         root = self.root
 
-        # Шапка (центрированный заголовок без значка)
+        # Шапка (центрированный заголовок)
         header = tk.Frame(root, bg=BG)
         header.pack(fill="x", padx=12, pady=(8, 2))
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(anchor="center")
 
-        # ---- Интерактивная плашка баланса (с cat.png) ----
+        # ---- Интерактивная плашка баланса ----
         self.balance_card = tk.Frame(
             root, bg=SURFACE, 
             highlightbackground=BORDER, highlightthickness=1,
@@ -229,7 +223,7 @@ class HuEvoClicker:
             highlightbackground=BORDER,
         ).pack(fill="x", padx=12, pady=(2, 0), ipady=1)
 
-        # ---- Параметры таймера (центрированные контейнеры) ----
+        # ---- Параметры таймера ----
         self.params_parent = tk.Frame(root, bg=BG)
         self.params_parent.pack(fill="x", padx=12, pady=(4, 1))
 
@@ -281,10 +275,9 @@ class HuEvoClicker:
         rentry(rand_inner, self.rand_max_var)
         tk.Label(rand_inner, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(2, 0))
 
-        # По умолчанию отображаем фиксированный контейнер
         self.fixed_container.pack(fill="x")
 
-        # Единая кнопка переключения режимов под параметрами
+        # Единая кнопка переключения режимов
         self.mode_btn = tk.Button(
             root, text="таймер-клик", command=self.toggle_timer_mode,
             bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,

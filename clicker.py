@@ -3,8 +3,15 @@ import keyboard
 import threading
 import time
 import random
+import json
+import os
+import re
+import sys
 import ctypes
 from ctypes import wintypes
+
+import requests
+from bs4 import BeautifulSoup
 
 # ==========================================================
 #  WinAPI
@@ -80,6 +87,35 @@ _SCREEN_H = user32.GetSystemMetrics(1)
 
 
 # ==========================================================
+#  Конфиг (сохранение cookie рядом с exe)
+# ==========================================================
+def _app_dir():
+    """Папка рядом с exe (для PyInstaller --onefile) или рядом со скриптом."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+CONFIG_PATH = os.path.join(_app_dir(), "huEvoClicker.config.json")
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_config(cfg):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# ==========================================================
 #  Палитра
 # ==========================================================
 BG         = "#1e1f22"
@@ -106,7 +142,7 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("220x330")
+        self.root.geometry("240x400")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
@@ -114,12 +150,24 @@ class HuEvoClicker:
         self.points = []
         self.is_running = False
         self.thread = None
-        self.timer_mode = "fixed"   # "fixed" | "random"
+        self.timer_mode = "fixed"
+
+        # cookie + блокировка
+        self.session_cookie = ""
+        self._balance_lock = threading.Lock()
+        self._balance_stop = False
+
+        # загрузка конфига
+        cfg = load_config()
+        self.session_cookie = cfg.get("session", "")
 
         self._build_ui()
 
         keyboard.add_hotkey('F2', self.add_point)
         keyboard.add_hotkey('F6', self.toggle_clicking)
+
+        # Запускаем опрос баланса
+        threading.Thread(target=self._balance_poller, daemon=True).start()
 
     # ------------------------------------------------------
     def _build_ui(self):
@@ -131,6 +179,38 @@ class HuEvoClicker:
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(0, 4))
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(side="left")
+
+        # ---- Cookie ----
+        tk.Label(root, text="cookie session", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(anchor="w", padx=10, pady=(4, 0))
+
+        cookie_row = tk.Frame(root, bg=BG)
+        cookie_row.pack(fill="x", padx=10, pady=(2, 4))
+
+        self.cookie_var = tk.StringVar(value=self.session_cookie)
+        cookie_entry = tk.Entry(
+            cookie_row, textvariable=self.cookie_var, show="•",
+            bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
+            relief="flat", font=FONT_MONO, bd=0,
+            highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=ACCENT,
+        )
+        cookie_entry.pack(side="left", fill="x", expand=True, ipady=3)
+
+        tk.Button(
+            cookie_row, text="OK", command=self._apply_cookie,
+            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV,
+            activeforeground="#fff", relief="flat", bd=0,
+            font=("Segoe UI", 8, "bold"), cursor="hand2",
+            padx=8,
+        ).pack(side="left", padx=(4, 0), ipady=3)
+
+        # ---- Баланс ----
+        self.balance_label = tk.Label(
+            root, text="💰 ---", bg=BG, fg=ACCENT,
+            font=("Consolas", 12, "bold"),
+        )
+        self.balance_label.pack(pady=(2, 6))
 
         # ---- Точки ----
         tk.Button(
@@ -160,15 +240,13 @@ class HuEvoClicker:
             highlightbackground=BORDER,
         ).pack(fill="x", padx=10, pady=(4, 0), ipady=2)
 
-        # ---- Интервал: строка 1 (фикс) + переключатель ----
+        # ---- Интервал (фикс) + переключатель ----
         tf = tk.Frame(root, bg=BG)
         tf.pack(fill="x", padx=10, pady=(6, 2))
 
         self.min_var = tk.StringVar(value="0")
         self.sec_var = tk.StringVar(value="0")
         self.ms_var  = tk.StringVar(value="50")
-
-        self.fixed_entries = []
 
         def entry(parent, var, width=3):
             e = tk.Entry(parent, textvariable=var, width=width, justify="center",
@@ -179,23 +257,21 @@ class HuEvoClicker:
             e.pack(side="left", ipady=2, padx=(0, 1))
             return e
 
-        self.fixed_entries.append(entry(tf, self.min_var))
+        entry(tf, self.min_var)
         tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TINY).pack(side="left", padx=(0, 4))
-        self.fixed_entries.append(entry(tf, self.sec_var))
+        entry(tf, self.sec_var)
         tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TINY).pack(side="left", padx=(0, 4))
-        self.fixed_entries.append(entry(tf, self.ms_var))
+        entry(tf, self.ms_var)
         tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TINY).pack(side="left", padx=(0, 6))
 
-        # Переключатель Фикс / Рандом — справа
         self.mode_switch = self._make_switch(tf)
         self.mode_switch.pack(side="left")
 
-        # ---- Интервал: строка 2 (рандом, скрыта пока) ----
+        # ---- Рандом ----
         self.rand_frame = tk.Frame(root, bg=BG)
-
         self.rand_min_var = tk.StringVar(value="30")
         self.rand_max_var = tk.StringVar(value="120")
 
@@ -222,7 +298,7 @@ class HuEvoClicker:
             root, text="●  Выкл", bg=RED, fg="#fff",
             font=("Segoe UI", 8, "bold"), padx=8, pady=2,
         )
-        self.pill.pack(pady=(8, 4))
+        self.pill.pack(pady=(6, 4))
 
         # ---- Старт ----
         self.start_btn = tk.Button(
@@ -238,13 +314,76 @@ class HuEvoClicker:
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
 
     # ------------------------------------------------------
+    #  Cookie
+    # ------------------------------------------------------
+    def _apply_cookie(self):
+        value = self.cookie_var.get().strip()
+        self.session_cookie = value
+
+        cfg = load_config()
+        cfg["session"] = value
+        save_config(cfg)
+
+        # мгновенно дёргаем баланс, не дожидаясь следующего тика
+        threading.Thread(target=self._refresh_balance_once, daemon=True).start()
+
+    # ------------------------------------------------------
+    #  Баланс
+    # ------------------------------------------------------
+    def _fetch_balance(self):
+        cookie = self.session_cookie.strip()
+        if not cookie:
+            return None
+        try:
+            r = requests.get(
+                "https://huevo.su/clicker",
+                cookies={"session": cookie},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                return None
+            soup = BeautifulSoup(r.text, "html.parser")
+            el = soup.find("b", id="ck-balance")
+            if el:
+                m = re.search(r"\d+", el.text.replace(" ", ""))
+                if m:
+                    return int(m.group())
+        except Exception:
+            pass
+        return None
+
+    def _refresh_balance_once(self):
+        bal = self._fetch_balance()
+        self._update_balance_label(bal)
+
+    def _update_balance_label(self, bal):
+        def _do():
+            if bal is None:
+                self.balance_label.config(text="💰 ---", fg=TEXT_MUTED)
+            else:
+                self.balance_label.config(
+                    text=f"💰 {bal:,}".replace(",", " "), fg=ACCENT,
+                )
+        try:
+            self.root.after(0, _do)
+        except tk.TclError:
+            pass
+
+    def _balance_poller(self):
+        while not self._balance_stop:
+            bal = self._fetch_balance()
+            self._update_balance_label(bal)
+            # спим 20 секунд, но просыпаемся чаще, чтобы успеть отреагировать
+            for _ in range(40):
+                if self._balance_stop:
+                    return
+                time.sleep(0.5)
+
+    # ------------------------------------------------------
     #  Переключатель Фикс / Рандом
     # ------------------------------------------------------
     def _make_switch(self, parent):
-        """
-        Компактный двухпозиционный переключатель:
-        [ Ф ] [ Р ]  — активная половинка подсвечена.
-        """
         wrap = tk.Frame(parent, bg=SURFACE_2,
                         highlightbackground=BORDER, highlightthickness=1)
 
@@ -263,7 +402,6 @@ class HuEvoClicker:
 
     def _set_timer_mode(self, mode):
         self.timer_mode = mode
-
         if mode == "fixed":
             self.sw_fixed.config(bg=ACCENT, fg="#fff")
             self.sw_random.config(bg=SURFACE_2, fg=TEXT_MUTED)
@@ -271,19 +409,8 @@ class HuEvoClicker:
         else:
             self.sw_fixed.config(bg=SURFACE_2, fg=TEXT_MUTED)
             self.sw_random.config(bg=ACCENT, fg="#fff")
-            # вставляем сразу под строкой фикс-интервала
             self.rand_frame.pack(fill="x", padx=10, pady=(2, 0),
-                                 after=self._fixed_row_widget())
-
-    def _fixed_row_widget(self):
-        # Найти родительский фрейм строки фикс-интервала (первый child header'а после точек)
-        for child in self.root.winfo_children():
-            if isinstance(child, tk.Frame) and child.winfo_children():
-                for sub in child.winfo_children():
-                    if sub is self.min_var:
-                        return child
-        # fallback — просто последний фрейм
-        return self.root.winfo_children()[-3]
+                                 before=self.pill)
 
     # ------------------------------------------------------
     def add_point(self):
@@ -295,9 +422,7 @@ class HuEvoClicker:
         self.points.clear()
         self.listbox.delete(0, tk.END)
 
-    # ------------------------------------------------------
     def get_interval_seconds(self):
-        """Фикс-интервал в секундах."""
         try:
             m  = int(self.min_var.get() or 0)
             s  = int(self.sec_var.get() or 0)
@@ -308,7 +433,6 @@ class HuEvoClicker:
             return 0.0
 
     def get_random_interval_seconds(self):
-        """Случайный интервал в секундах из диапазона [rand_min, rand_max] мс."""
         try:
             lo = int(self.rand_min_var.get() or 0)
             hi = int(self.rand_max_var.get() or 0)
@@ -316,7 +440,6 @@ class HuEvoClicker:
             return 0.0
         if lo < 0: lo = 0
         if hi < lo: lo, hi = hi, lo
-        # random.randint включает оба конца
         return random.randint(lo, hi) / 1000.0
 
     # ------------------------------------------------------
@@ -337,8 +460,6 @@ class HuEvoClicker:
             self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
 
-    # ------------------------------------------------------
-    #  Горячий цикл
     # ------------------------------------------------------
     def _loop(self):
         send_input = user32.SendInput
@@ -362,7 +483,6 @@ class HuEvoClicker:
             i += 1
 
             if self.timer_mode == "random":
-                # каждый интервал — новое случайное значение
                 delay = self.get_random_interval_seconds()
                 if delay > 0:
                     time.sleep(delay)

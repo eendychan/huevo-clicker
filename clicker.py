@@ -8,13 +8,15 @@ import os
 import re
 import sys
 import webbrowser
+import urllib.request
+import io
 import ctypes
 from ctypes import wintypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
 try:
-    from PIL import Image, ImageTk, ImageEnhance
+    from PIL import Image, ImageTk, ImageEnhance, ImageOps
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -140,11 +142,13 @@ class HuEvoClicker:
         self.stat_day = "0"
         self.stat_clicks = "0"
         self.stat_total = "0"
+        self.last_avatar_url = ""
 
-        # Плавные кадры анимации кота (с фиксированным размером холста во избежание тряски)
+        # Кэш картинок
         self.cat_frames = []
         self.cat_photo_dim = None
         self.cat_photo_normal = None
+        self.avatar_photo = None
 
         cat_path = resource_path("cat.png")
         if os.path.exists(cat_path) and PIL_AVAILABLE:
@@ -157,7 +161,6 @@ class HuEvoClicker:
                 
                 self.cat_photo_normal = ImageTk.PhotoImage(pil_img)
 
-                # Генерируем кадры с абсолютно одинаковым размером (new_w, new_h)
                 def make_frame(img_transformed):
                     f = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
                     fw, fh = img_transformed.size
@@ -203,7 +206,7 @@ class HuEvoClicker:
     def _build_ui(self):
         root = self.root
 
-        # ---- Кастомная минималистичная шапка окна ----
+        # ---- Кастомная минималистичная шапка окна (с исправленным сворачиванием) ----
         self.title_bar = tk.Frame(root, bg=BG, height=28)
         self.title_bar.pack(fill="x", side="top")
         self.title_bar.pack_propagate(False)
@@ -216,7 +219,7 @@ class HuEvoClicker:
                               activeforeground="#fff", relief="flat", bd=0, font=FONT_TINY, width=3)
         close_btn.pack(side="right", fill="y")
 
-        min_btn = tk.Button(self.title_bar, text="—", command=root.iconify,
+        min_btn = tk.Button(self.title_bar, text="—", command=lambda: root.iconify(),
                             bg=BG, fg=TEXT_MUTED, activebackground=SURFACE_HOV,
                             activeforeground=TEXT, relief="flat", bd=0, font=FONT_TINY, width=3)
         min_btn.pack(side="right", fill="y")
@@ -243,16 +246,33 @@ class HuEvoClicker:
         self.balance_card.pack(fill="x", pady=(2, 3))
         self.balance_card.pack_propagate(False)
 
+        # Левая часть баланс-карты (кот + цифры)
+        self.balance_left_frame = tk.Frame(self.balance_card, bg=SURFACE)
+        self.balance_left_frame.pack(side="left", fill="y", padx=4)
+
         self.balance_label = tk.Label(
-            self.balance_card, text="  Ожидание вкладки...", bg=SURFACE, fg=TEXT_MUTED,
+            self.balance_left_frame, text="  Ожидание вкладки...", bg=SURFACE, fg=TEXT_MUTED,
             font=("Consolas", 9, "bold")
         )
         if self.cat_photo_dim:
             self.balance_label.config(image=self.cat_photo_dim, compound="left")
-        self.balance_label.pack(side="left", padx=6, pady=5)
+        self.balance_label.pack(side="left", pady=5)
+
+        # Правая часть баланс-карты (аватарка и никнейм)
+        self.balance_right_frame = tk.Frame(self.balance_card, bg=SURFACE)
+        self.balance_right_frame.pack(side="right", fill="y", padx=6)
+
+        self.avatar_label = tk.Label(self.balance_right_frame, bg=SURFACE)
+        self.avatar_label.pack(side="right", pady=4)
+
+        self.user_label = tk.Label(
+            self.balance_right_frame, text="", bg=SURFACE, fg=TEXT_MUTED,
+            font=("Consolas", 8)
+        )
+        self.user_label.pack(side="right", padx=(0, 4), pady=6)
 
         # Привязка событий наведения для расширения кнопки баланса вниз
-        for widget in (self.balance_card, self.balance_label):
+        for widget in (self.balance_card, self.balance_left_frame, self.balance_right_frame, self.balance_label, self.user_label, self.avatar_label):
             widget.bind("<Enter>", self._on_card_enter)
             widget.bind("<Leave>", self._on_card_leave)
             widget.bind("<Button-1>", lambda e: self.open_sync_modal())
@@ -268,7 +288,6 @@ class HuEvoClicker:
             w.bind("<Leave>", self._on_card_leave)
             w.bind("<Button-1>", lambda e: self.open_sync_modal())
 
-        # Внутренности расширенной кнопки баланса (левые метки, правые значения без двоеточий)
         exp_inner = tk.Frame(self.expanded_card, bg=SURFACE)
         exp_inner.pack(fill="both", expand=True, padx=8, pady=4)
 
@@ -395,7 +414,6 @@ class HuEvoClicker:
         tk.Label(main_frame, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 1))
 
-        # Контейнер для тонкой радужной обводки кнопки «Проебать»
         self.proebat_wrapper = tk.Frame(main_frame, bg=RED_COL, bd=0)
         self.proebat_wrapper.pack(fill="x", pady=(1, 0))
 
@@ -433,7 +451,6 @@ class HuEvoClicker:
             self.exp_clicks_val.config(text=self.stat_clicks)
             self.exp_total_val.config(text=self.stat_total)
             
-            # Раскрываем плашку баланса вниз поверх интерфейса
             self.expanded_card.place(x=12, y=32, relwidth=1, width=-24, height=72)
             self.expanded_card.lift()
 
@@ -493,8 +510,8 @@ class HuEvoClicker:
         info_text = (
             "1. Установите расширение Tampermonkey в браузер.\n"
             "2. Создайте новый скрипт и вставьте код ниже.\n"
-            "3. Откройте вкладку huevo.su/clicker — баланс, тоасты\n"
-            "   и расширенная статистика будут передаваться в кликер."
+            "3. Откройте вкладку huevo.su/clicker — баланс, аватар,\n"
+            "   никнейм и статистика будут передаваться в кликер."
         )
         tk.Label(
             modal, text=info_text, bg=BG, fg=TEXT_MUTED,
@@ -513,7 +530,7 @@ class HuEvoClicker:
             "// ==UserScript==\n"
             "// @name         HuEvo Clicker Full Sync\n"
             "// @namespace    http://tampermonkey.net/\n"
-            "// @version      1.2\n"
+            "// @version      1.3\n"
             "// @match        https://huevo.su/clicker*\n"
             "// @grant        none\n"
             "// ==/UserScript==\n\n"
@@ -526,11 +543,15 @@ class HuEvoClicker:
             "        const dayEl = document.getElementById('ck-day');\n"
             "        const clicksEl = document.getElementById('ck-clicks');\n"
             "        const totalEl = document.getElementById('ck-total');\n"
+            "        const userEl = document.querySelector('.mh-user-name');\n"
+            "        const avEl = document.querySelector('.mh-user-av');\n"
             "        \n"
             "        const balanceText = el ? el.innerText : '';\n"
             "        const dayText = dayEl ? dayEl.innerText : '0';\n"
             "        const clicksText = clicksEl ? clicksEl.innerText : '0';\n"
             "        const totalText = totalEl ? totalEl.innerText : '0';\n"
+            "        const userText = userEl ? userEl.innerText : '';\n"
+            "        const avUrl = avEl ? avEl.src : '';\n"
             "        \n"
             "        let toastText = '';\n"
             "        if (toastEl && toastEl.style.display !== 'none' && toastEl.innerText) {\n"
@@ -543,7 +564,7 @@ class HuEvoClicker:
             "            lastToast = '';\n"
             "        }\n"
             "\n"
-            "        let url = 'http://127.0.0.1:58321/update?balance=' + encodeURIComponent(balanceText) + '&day=' + encodeURIComponent(dayText) + '&clicks=' + encodeURIComponent(clicksText) + '&total=' + encodeURIComponent(totalText);\n"
+            "        let url = 'http://127.0.0.1:58321/update?balance=' + encodeURIComponent(balanceText) + '&day=' + encodeURIComponent(dayText) + '&clicks=' + encodeURIComponent(clicksText) + '&total=' + encodeURIComponent(totalText) + '&user=' + encodeURIComponent(userText) + '&av=' + encodeURIComponent(avUrl);\n"
             "        if (toastText) {\n"
             "            url += '&toast=' + encodeURIComponent(toastText);\n"
             "        }\n"
@@ -605,8 +626,11 @@ class HuEvoClicker:
                     outer.stat_clicks = query.get("clicks", ["0"])[0]
                     outer.stat_total = query.get("total", ["0"])[0]
                     
+                    user_str = query.get("user", [""])[0]
+                    av_url = query.get("av", [""])[0]
+                    
                     if bal_str:
-                        outer._update_balance_from_web(bal_str)
+                        outer._update_balance_from_web(bal_str, user_str, av_url)
                     if toast_str:
                         outer._show_toast(toast_str)
                 
@@ -624,7 +648,7 @@ class HuEvoClicker:
         except Exception:
             pass
 
-    def _update_balance_from_web(self, bal_str):
+    def _update_balance_from_web(self, bal_str, user_str="", av_url=""):
         is_first_active = not self.tab_active
         self.tab_active = True
         self.last_update_time = time.time()
@@ -632,6 +656,33 @@ class HuEvoClicker:
         try:
             bal = int(re.sub(r"\D", "", bal_str))
             self.current_bal_text = f"{bal:,}".replace(",", " ")
+            
+            # Обработка никнейма (первые 3 буквы + ...)
+            short_user = ""
+            if user_str:
+                clean_u = user_str.strip()
+                short_user = (clean_u[:3] + "...") if len(clean_u) > 3 else clean_u
+
+            # Загрузка аватара
+            if av_url and av_url != self.last_avatar_url and PIL_AVAILABLE:
+                self.last_avatar_url = av_url
+                try:
+                    req = urllib.request.Request(av_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=3) as response:
+                        img_data = response.read()
+                        im = Image.open(io.BytesIO(img_data)).convert("RGBA")
+                        im = im.resize((20, 20), Image.Resampling.LANCZOS)
+                        
+                        # Делаем аватарку круглой
+                        mask = Image.new('L', (20, 20), 0)
+                        draw = Image.Draw(mask)
+                        draw.ellipse((0, 0, 20, 20), fill=255)
+                        im.putalpha(mask)
+                        
+                        self.avatar_photo = ImageTk.PhotoImage(im)
+                except Exception:
+                    self.avatar_photo = None
+
             def _do():
                 if is_first_active and self.cat_photo_normal:
                     self.balance_label.config(image=self.cat_photo_normal)
@@ -640,6 +691,11 @@ class HuEvoClicker:
                     text=f" {self.current_bal_text}", fg=TEXT,
                 )
                 self.balance_card.config(bg=SURFACE)
+                
+                if short_user:
+                    self.user_label.config(text=short_user)
+                if self.avatar_photo:
+                    self.avatar_label.config(image=self.avatar_photo)
 
                 if self.last_balance is not None and bal != self.last_balance:
                     self._trigger_cat_bounce()
@@ -684,10 +740,13 @@ class HuEvoClicker:
             if self.last_update_time > 0 and (time.time() - self.last_update_time > 6):
                 self.tab_active = False
                 self.last_balance = None
+                self.last_avatar_url = ""
                 def _do():
                     if self.cat_photo_dim:
                         self.balance_label.config(image=self.cat_photo_dim)
                     self.balance_label.config(text=" Вкладка не найдена", fg=TEXT_MUTED)
+                    self.user_label.config(text="")
+                    self.avatar_label.config(image="")
                     self.expanded_card.place_forget()
                 try:
                     self.root.after(0, _do)

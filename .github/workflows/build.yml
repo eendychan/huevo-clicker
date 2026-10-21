@@ -28,7 +28,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --noconsole --icon=icon.ico --name AutoClicker clicker.py
+          pyinstaller --onefile --noconsole --icon=icon.ico --add-data "cat.png;." --name AutoClicker clicker.py
 
       - name: Upload artifact (для скачивания из вкладки Actions)
         uses: actions/upload-artifact@v4

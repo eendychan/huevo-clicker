@@ -10,7 +10,7 @@ import sys
 import ctypes
 from ctypes import wintypes
 
-import requests
+from tkinterweb import HtmlFrame
 from bs4 import BeautifulSoup
 
 # ==========================================================
@@ -87,7 +87,7 @@ _SCREEN_H = user32.GetSystemMetrics(1)
 
 
 # ==========================================================
-#  Конфиг (сохранение настроек рядом с exe)
+#  Конфиг
 # ==========================================================
 def _app_dir():
     if getattr(sys, "frozen", False):
@@ -141,145 +141,82 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("240x460")
+        self.root.geometry("600x520")  # Увеличено окно для размещения браузера
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
 
         self.points = []
         self.is_running = False
         self.thread = None
         self.timer_mode = "fixed"
-        self.auth_method = "login"
-
-        # Данные авторизации
-        self.session_cookie = ""
-        self.saved_username = ""
-        self._balance_stop = False
-
-        # Загрузка конфига
-        cfg = load_config()
-        self.session_cookie = cfg.get("session", "")
-        self.saved_username = cfg.get("username", "")
-        self.auth_method = cfg.get("auth_mode", "login")
 
         self._build_ui()
 
         keyboard.add_hotkey('F2', self.add_point)
         keyboard.add_hotkey('F6', self.toggle_clicking)
 
-        # Запускаем опрос баланса
-        threading.Thread(target=self._balance_poller, daemon=True).start()
+        # Запускаем браузер на странице кликера
+        self.html_frame.load_website("https://huevo.su/clicker")
+
+        # Автоматическое считывание баланса и перезагрузка каждые 15 секунд
+        self.root.after(5000, self._auto_refresh_web_balance)
 
     # ------------------------------------------------------
     def _build_ui(self):
         root = self.root
 
-        header = tk.Frame(root, bg=BG)
-        header.pack(fill="x", padx=10, pady=(8, 4))
+        # Левая панель (управление кликером)
+        left_panel = tk.Frame(root, bg=BG, width=240)
+        left_panel.pack(side="left", fill="y", padx=10, pady=8)
+        left_panel.pack_propagate(False)
+
+        # Правая панель (Встроенный браузер)
+        right_panel = tk.Frame(root, bg=SURFACE_2, highlightbackground=BORDER, highlightthickness=1)
+        right_panel.pack(side="right", fill="both", expand=True, padx=(0, 10), pady=8)
+
+        # ---- Браузер ----
+        web_header = tk.Frame(right_panel, bg=SURFACE_2)
+        web_header.pack(fill="x", padx=4, pady=2)
+        
+        tk.Label(web_header, text="Встроенный сайт (huevo.su)", bg=SURFACE_2, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left")
+        
+        tk.Button(
+            web_header, text="↻ Обновить", command=self._refresh_browser,
+            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
+            relief="flat", bd=0, font=("Segoe UI", 8, "bold"), cursor="hand2", padx=6
+        ).pack(side="right")
+
+        self.html_frame = HtmlFrame(right_panel, messages_enabled=False)
+        self.html_frame.pack(fill="both", expand=True)
+
+        # ---- Левая панель: Заголовок ----
+        header = tk.Frame(left_panel, bg=BG)
+        header.pack(fill="x", pady=(0, 4))
         tk.Label(header, text="✦", bg=BG, fg=ACCENT,
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(0, 4))
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(side="left")
 
-        # ---- Переключатель метода авторизации ----
-        auth_switch_frame = tk.Frame(root, bg=BG)
-        auth_switch_frame.pack(fill="x", padx=10, pady=(2, 2))
-
-        self.btn_auth_login = tk.Button(
-            auth_switch_frame, text="Логин / Пароль", command=lambda: self._set_auth_method("login"),
-            bg=ACCENT if self.auth_method == "login" else SURFACE_2,
-            fg="#fff" if self.auth_method == "login" else TEXT_MUTED,
-            relief="flat", bd=0, font=("Segoe UI", 8, "bold"), cursor="hand2"
-        )
-        self.btn_auth_login.pack(side="left", fill="x", expand=True, ipady=2, padx=(0, 2))
-
-        self.btn_auth_cookie = tk.Button(
-            auth_switch_frame, text="Cookie", command=lambda: self._set_auth_method("cookie"),
-            bg=ACCENT if self.auth_method == "cookie" else SURFACE_2,
-            fg="#fff" if self.auth_method == "cookie" else TEXT_MUTED,
-            relief="flat", bd=0, font=("Segoe UI", 8, "bold"), cursor="hand2"
-        )
-        self.btn_auth_cookie.pack(side="left", fill="x", expand=True, ipady=2, padx=(2, 0))
-
-        # ---- Контейнер полей авторизации ----
-        self.auth_container = tk.Frame(root, bg=BG)
-        self.auth_container.pack(fill="x", padx=10, pady=(2, 4))
-
-        # Блок входа по логину и паролю
-        self.login_frame = tk.Frame(self.auth_container, bg=BG)
-        
-        tk.Label(self.login_frame, text="логин / почта", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(anchor="w")
-        self.username_var = tk.StringVar(value=self.saved_username)
-        tk.Entry(
-            self.login_frame, textvariable=self.username_var,
-            bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
-            relief="flat", font=FONT_MONO, bd=0,
-            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT
-        ).pack(fill="x", ipady=2, pady=(1, 3))
-
-        tk.Label(self.login_frame, text="пароль", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(anchor="w")
-        self.password_var = tk.StringVar()
-        pass_row = tk.Frame(self.login_frame, bg=BG)
-        pass_row.pack(fill="x", pady=(1, 2))
-
-        self.pass_entry = tk.Entry(
-            pass_row, textvariable=self.password_var, show="•",
-            bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
-            relief="flat", font=FONT_MONO, bd=0,
-            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT
-        )
-        self.pass_entry.pack(side="left", fill="x", expand=True, ipady=2)
-
-        tk.Button(
-            pass_row, text="Войти", command=self._login_to_huevo,
-            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV,
-            activeforeground="#fff", relief="flat", bd=0,
-            font=("Segoe UI", 8, "bold"), cursor="hand2", padx=8
-        ).pack(side="left", padx=(4, 0), ipady=2)
-
-        # Блок входа по Cookie
-        self.cookie_frame = tk.Frame(self.auth_container, bg=BG)
-        tk.Label(self.cookie_frame, text="cookie session", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(anchor="w")
-        cookie_row = tk.Frame(self.cookie_frame, bg=BG)
-        cookie_row.pack(fill="x", pady=(1, 2))
-
-        self.cookie_var = tk.StringVar(value=self.session_cookie)
-        tk.Entry(
-            cookie_row, textvariable=self.cookie_var, show="•",
-            bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
-            relief="flat", font=FONT_MONO, bd=0,
-            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT
-        ).pack(side="left", fill="x", expand=True, ipady=2)
-
-        tk.Button(
-            cookie_row, text="OK", command=self._apply_cookie,
-            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV,
-            activeforeground="#fff", relief="flat", bd=0,
-            font=("Segoe UI", 8, "bold"), cursor="hand2", padx=8
-        ).pack(side="left", padx=(4, 0), ipady=2)
-
-        self._refresh_auth_view()
-
         # ---- Баланс ----
         self.balance_label = tk.Label(
-            root, text="💰 ---", bg=BG, fg=ACCENT,
+            left_panel, text="💰 ---", bg=BG, fg=ACCENT,
             font=("Consolas", 12, "bold"),
         )
-        self.balance_label.pack(pady=(2, 4))
+        self.balance_label.pack(pady=(4, 6))
 
         # ---- Точки ----
         tk.Button(
-            root, text="+  Добавить точку (F2)", command=self.add_point,
+            left_panel, text="+ Добавить точку (F2)", command=self.add_point,
             bg=SURFACE_2, fg=TEXT, activebackground=ACCENT_HOV,
             activeforeground="#fff", relief="flat", bd=0,
             font=FONT_BODY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
-        ).pack(fill="x", padx=10, pady=(2, 4), ipady=4)
+        ).pack(fill="x", pady=(2, 4), ipady=4)
 
-        list_wrap = tk.Frame(root, bg=SURFACE_2,
+        list_wrap = tk.Frame(left_panel, bg=SURFACE_2,
                              highlightbackground=BORDER, highlightthickness=1)
-        list_wrap.pack(fill="x", padx=10)
+        list_wrap.pack(fill="x")
 
         self.listbox = tk.Listbox(
             list_wrap, height=4, bg=SURFACE_2, fg=TEXT,
@@ -289,16 +226,16 @@ class HuEvoClicker:
         self.listbox.pack(fill="x", padx=4, pady=4)
 
         tk.Button(
-            root, text="✕  Очистить", command=self.clear_points,
+            left_panel, text="✕ Очистить", command=self.clear_points,
             bg=SURFACE_2, fg=TEXT_MUTED, activebackground="#3a3d43",
             activeforeground=TEXT, relief="flat", bd=0,
             font=FONT_TINY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
-        ).pack(fill="x", padx=10, pady=(4, 0), ipady=2)
+        ).pack(fill="x", pady=(4, 0), ipady=2)
 
-        # ---- Интервал (фикс) + переключатель ----
-        tf = tk.Frame(root, bg=BG)
-        tf.pack(fill="x", padx=10, pady=(6, 2))
+        # ---- Интервал ----
+        tf = tk.Frame(left_panel, bg=BG)
+        tf.pack(fill="x", pady=(6, 2))
 
         self.min_var = tk.StringVar(value="0")
         self.sec_var = tk.StringVar(value="0")
@@ -314,20 +251,17 @@ class HuEvoClicker:
             return e
 
         entry(tf, self.min_var)
-        tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(0, 4))
+        tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
         entry(tf, self.sec_var)
-        tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(0, 4))
+        tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
         entry(tf, self.ms_var)
-        tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(0, 6))
+        tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 6))
 
         self.mode_switch = self._make_switch(tf)
         self.mode_switch.pack(side="left")
 
         # ---- Рандом ----
-        self.rand_frame = tk.Frame(root, bg=BG)
+        self.rand_frame = tk.Frame(left_panel, bg=BG)
         self.rand_min_var = tk.StringVar(value="30")
         self.rand_max_var = tk.StringVar(value="120")
 
@@ -340,204 +274,69 @@ class HuEvoClicker:
             e.pack(side="left", ipady=2, padx=(0, 1))
             return e
 
-        tk.Label(self.rand_frame, text="от", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(0, 2))
+        tk.Label(self.rand_frame, text="от", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 2))
         rentry(self.rand_frame, self.rand_min_var)
-        tk.Label(self.rand_frame, text="до", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(4, 2))
+        tk.Label(self.rand_frame, text="до", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(4, 2))
         rentry(self.rand_frame, self.rand_max_var)
-        tk.Label(self.rand_frame, text="мс", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left", padx=(2, 0))
+        tk.Label(self.rand_frame, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(2, 0))
 
         # ---- Статус ----
         self.pill = tk.Label(
-            root, text="●  Выкл", bg=RED, fg="#fff",
+            left_panel, text="● Выкл", bg=RED, fg="#fff",
             font=("Segoe UI", 8, "bold"), padx=8, pady=2,
         )
         self.pill.pack(pady=(6, 4))
 
         # ---- Старт ----
         self.start_btn = tk.Button(
-            root, text="▶  Старт (F6)", command=self.toggle_clicking,
+            left_panel, text="▶ Старт (F6)", command=self.toggle_clicking,
             bg=ACCENT, fg="#fff",
             activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, cursor="hand2",
             font=("Unbounded", 8, "bold"),
         )
-        self.start_btn.pack(fill="x", padx=10, pady=(0, 6), ipady=6)
+        self.start_btn.pack(fill="x", pady=(0, 6), ipady=6)
 
-        tk.Label(root, text="F2 — точка · F6 — старт/стоп",
+        tk.Label(left_panel, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
 
     # ------------------------------------------------------
-    #  Методы авторизации
+    #  Логика взаимодействия с встроенным браузером
     # ------------------------------------------------------
-    def _set_auth_method(self, method):
-        self.auth_method = method
-        cfg = load_config()
-        cfg["auth_mode"] = method
-        save_config(cfg)
-        self._refresh_auth_view()
+    def _refresh_browser(self):
+        """Ручная или автоматическая перезагрузка браузера"""
+        self.html_frame.load_website("https://huevo.su/clicker")
 
-    def _refresh_auth_view(self):
-        if self.auth_method == "login":
-            self.btn_auth_login.config(bg=ACCENT, fg="#fff")
-            self.btn_auth_cookie.config(bg=SURFACE_2, fg=TEXT_MUTED)
-            self.cookie_frame.pack_forget()
-            self.login_frame.pack(fill="x", expand=True)
-        else:
-            self.btn_auth_login.config(bg=SURFACE_2, fg=TEXT_MUTED)
-            self.btn_auth_cookie.config(bg=ACCENT, fg="#fff")
-            self.login_frame.pack_forget()
-            self.cookie_frame.pack(fill="x", expand=True)
-
-    def _apply_cookie(self):
-        value = self.cookie_var.get().strip()
-        self.session_cookie = value
-
-        cfg = load_config()
-        cfg["session"] = value
-        save_config(cfg)
-
-        threading.Thread(target=self._refresh_balance_once, daemon=True).start()
-
-    def _login_to_huevo(self):
-        username = self.username_var.get().strip()
-        password = self.password_var.get().strip()
-
-        if not username or not password:
-            self._update_status_msg("⚠ Введите логин/пароль", YELLOW)
-            return
-
-        def _do_login():
-            try:
-                session = requests.Session()
-                session.headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                })
-                
-                # 1. Шаг: Сначала заходим на страницу авторизации, чтобы получить первичные куки и скрытые токены защиты (CSRF)
-                resp_get = session.get("https://huevo.su/login", timeout=10)
-                soup = BeautifulSoup(resp_get.text, "html.parser")
-                
-                payload = {
-                    "username": username,
-                    "password": password
-                }
-                
-                # Автоматически подтягиваем все скрытые поля формы (если сайт использует защитные токены)
-                for inp in soup.find_all("input"):
-                    name = inp.get("name")
-                    value = inp.get("value", "")
-                    if name and name.lower() not in ["username", "email", "password", "pass"]:
-                        payload[name] = value
-
-                # 2. Шаг: Отправляем POST запрос с собранными токенами и куками
-                r = session.post(
-                    "https://huevo.su/login",
-                    data=payload,
-                    allow_redirects=True,
-                    timeout=10
-                )
-                
-                # Ищем нужную сессионную куку в менеджере кук
-                cookie_val = None
-                for c in session.cookies:
-                    if any(k in c.name.lower() for k in ["session", "sid", "auth", "token", "php", "connect"]):
-                        cookie_val = c.value
-                        break
-                
-                if not cookie_val and session.cookies.get_dict():
-                    cookie_val = list(session.cookies.get_dict().values())[0]
-
-                if cookie_val:
-                    self.session_cookie = cookie_val
-                    cfg = load_config()
-                    cfg["session"] = cookie_val
-                    cfg["username"] = username
-                    save_config(cfg)
-                    self._update_status_msg("● Вход успешен", GREEN)
-                    self._refresh_balance_once()
+    def _auto_refresh_web_balance(self):
+        """Парсинг HTML внутри встроенного браузера и автообновление"""
+        try:
+            # Считываем текущий исходный код загруженной в браузер страницы
+            html_source = self.html_frame.get_content()
+            if html_source:
+                soup = BeautifulSoup(html_source, "html.parser")
+                el = soup.find("b", id="ck-balance")
+                if el:
+                    m = re.search(r"\d+", el.text.replace(" ", ""))
+                    if m:
+                        bal = int(m.group())
+                        self.balance_label.config(text=f"💰 {bal:,}".replace(",", " "), fg=ACCENT)
                 else:
-                    self._update_status_msg("⚠ Ошибка входа", RED)
-            except Exception as e:
-                self._update_status_msg("⚠ Ошибка сети", RED)
-
-        threading.Thread(target=_do_login, daemon=True).start()
-
-    def _update_status_msg(self, text, bg_color):
-        def _do():
-            self.pill.config(text=text, bg=bg_color)
-        try:
-            self.root.after(0, _do)
-        except tk.TclError:
-            pass
-
-    # ------------------------------------------------------
-    #  Баланс
-    # ------------------------------------------------------
-    def _fetch_balance(self):
-        cookie = self.session_cookie.strip()
-        if not cookie:
-            return None
-        try:
-            r = requests.get(
-                "https://huevo.su/clicker",
-                cookies={"session": cookie},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=10,
-            )
-            if r.status_code != 200:
-                return None
-            soup = BeautifulSoup(r.text, "html.parser")
-            el = soup.find("b", id="ck-balance")
-            if el:
-                m = re.search(r"\d+", el.text.replace(" ", ""))
-                if m:
-                    return int(m.group())
+                    self.balance_label.config(text="💰 Нужен вход", fg=YELLOW)
         except Exception:
             pass
-        return None
 
-    def _refresh_balance_once(self):
-        bal = self._fetch_balance()
-        self._update_balance_label(bal)
-
-    def _update_balance_label(self, bal):
-        def _do():
-            if bal is None:
-                self.balance_label.config(text="💰 ---", fg=TEXT_MUTED)
-            else:
-                self.balance_label.config(
-                    text=f"💰 {bal:,}".replace(",", " "), fg=ACCENT,
-                )
-        try:
-            self.root.after(0, _do)
-        except tk.TclError:
-            pass
-
-    def _balance_poller(self):
-        while not self._balance_stop:
-            bal = self._fetch_balance()
-            self._update_balance_label(bal)
-            for _ in range(40):
-                if self._balance_stop:
-                    return
-                time.sleep(0.5)
+        # Перезагружаем страницу в браузере каждые 15 секунд
+        self._refresh_browser()
+        self.root.after(15000, self._auto_refresh_web_balance)
 
     # ------------------------------------------------------
     #  Переключатель Фикс / Рандом
     # ------------------------------------------------------
     def _make_switch(self, parent):
-        wrap = tk.Frame(parent, bg=SURFACE_2,
-                        highlightbackground=BORDER, highlightthickness=1)
+        wrap = tk.Frame(parent, bg=SURFACE_2, highlightbackground=BORDER, highlightthickness=1)
 
-        self.sw_fixed  = tk.Label(wrap, text="Ф", bg=ACCENT, fg="#fff",
-                                  font=("Segoe UI", 8, "bold"),
-                                  width=2, cursor="hand2")
-        self.sw_random = tk.Label(wrap, text="Р", bg=SURFACE_2, fg=TEXT_MUTED,
-                                  font=("Segoe UI", 8, "bold"),
-                                  width=2, cursor="hand2")
+        self.sw_fixed  = tk.Label(wrap, text="Ф", bg=ACCENT, fg="#fff", font=("Segoe UI", 8, "bold"), width=2, cursor="hand2")
+        self.sw_random = tk.Label(wrap, text="Р", bg=SURFACE_2, fg=TEXT_MUTED, font=("Segoe UI", 8, "bold"), width=2, cursor="hand2")
         self.sw_fixed.pack(side="left")
         self.sw_random.pack(side="left")
 
@@ -554,8 +353,7 @@ class HuEvoClicker:
         else:
             self.sw_fixed.config(bg=SURFACE_2, fg=TEXT_MUTED)
             self.sw_random.config(bg=ACCENT, fg="#fff")
-            self.rand_frame.pack(fill="x", padx=10, pady=(2, 0),
-                                 before=self.pill)
+            self.rand_frame.pack(fill="x", pady=(2, 0), before=self.pill)
 
     # ------------------------------------------------------
     def add_point(self):
@@ -591,17 +389,17 @@ class HuEvoClicker:
     def toggle_clicking(self):
         if self.is_running:
             self.is_running = False
-            self.root.after(0, lambda: self.pill.config(text="●  Выкл", bg=RED))
+            self.root.after(0, lambda: self.pill.config(text="● Выкл", bg=RED))
             self.root.after(0, lambda: self.start_btn.config(
-                text="▶  Старт (F6)", bg=ACCENT, activebackground=ACCENT_HOV))
+                text="▶ Старт (F6)", bg=ACCENT, activebackground=ACCENT_HOV))
         else:
             if not self.points:
-                self.root.after(0, lambda: self.pill.config(text="⚠  нет точек", bg=YELLOW))
+                self.root.after(0, lambda: self.pill.config(text="⚠ нет точек", bg=YELLOW))
                 return
             self.is_running = True
-            self.root.after(0, lambda: self.pill.config(text="●  Работа", bg=GREEN))
+            self.root.after(0, lambda: self.pill.config(text="● Работа", bg=GREEN))
             self.root.after(0, lambda: self.start_btn.config(
-                text="■  Стоп (F6)", bg=RED, activebackground="#c03535"))
+                text="■ Стоп (F6)", bg=RED, activebackground="#c03535"))
             self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
 

@@ -150,7 +150,7 @@ class HuEvoClicker:
         self.is_running = False
         self.thread = None
         self.timer_mode = "fixed"
-        self.auth_method = "login"  # "login" или "cookie"
+        self.auth_method = "login"
 
         # Данные авторизации
         self.session_cookie = ""
@@ -412,17 +412,38 @@ class HuEvoClicker:
         def _do_login():
             try:
                 session = requests.Session()
+                session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                })
+                
+                # 1. Шаг: Сначала заходим на страницу авторизации, чтобы получить первичные куки и скрытые токены защиты (CSRF)
+                resp_get = session.get("https://huevo.su/login", timeout=10)
+                soup = BeautifulSoup(resp_get.text, "html.parser")
+                
+                payload = {
+                    "username": username,
+                    "password": password
+                }
+                
+                # Автоматически подтягиваем все скрытые поля формы (если сайт использует защитные токены)
+                for inp in soup.find_all("input"):
+                    name = inp.get("name")
+                    value = inp.get("value", "")
+                    if name and name.lower() not in ["username", "email", "password", "pass"]:
+                        payload[name] = value
+
+                # 2. Шаг: Отправляем POST запрос с собранными токенами и куками
                 r = session.post(
                     "https://huevo.su/login",
-                    data={"username": username, "password": password},
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    data=payload,
                     allow_redirects=True,
                     timeout=10
                 )
                 
+                # Ищем нужную сессионную куку в менеджере кук
                 cookie_val = None
                 for c in session.cookies:
-                    if "session" in c.name.lower() or "sid" in c.name.lower() or "auth" in c.name.lower():
+                    if any(k in c.name.lower() for k in ["session", "sid", "auth", "token", "php", "connect"]):
                         cookie_val = c.value
                         break
                 
@@ -439,7 +460,7 @@ class HuEvoClicker:
                     self._refresh_balance_once()
                 else:
                     self._update_status_msg("⚠ Ошибка входа", RED)
-            except Exception:
+            except Exception as e:
                 self._update_status_msg("⚠ Ошибка сети", RED)
 
         threading.Thread(target=_do_login, daemon=True).start()

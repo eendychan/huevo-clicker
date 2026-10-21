@@ -103,8 +103,8 @@ TEXT       = "#f4f4f5"
 TEXT_MUTED = "#71717a"
 ACCENT     = "#6366f1"
 ACCENT_HOV = "#4f46e5"
-GREEN_COL  = "#3c763d"  # Цвет уведомлений и старта (#3c763d)
-RED_COL    = "#E0262B"  # Цвет стопа и заглохшего состояния
+GREEN_COL  = "#3c763d"
+RED_COL    = "#E0262B"
 YELLOW     = "#f59e0b"
 
 FONT_TITLE = ("Segoe UI", 9, "bold")
@@ -127,7 +127,7 @@ def resource_path(relative_path):
 class HuEvoClicker:
     def __init__(self, root):
         self.root = root
-        self.root.overrideredirect(True)  # Убираем стандартную рамку Windows
+        self.root.overrideredirect(True)
         self.root.geometry("250x350")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
@@ -136,15 +136,14 @@ class HuEvoClicker:
         self.tab_active = False
         self.last_balance = None
         
-        # Статистика из браузера
         self.stat_day = "0"
         self.stat_clicks = "0"
         self.stat_total = "0"
 
-        # Кэш картинок котика и анимационных кадров
-        self.cat_photo_normal = None
-        self.cat_photo_bounced = None
+        # Плавные кадры анимации кота (нормальный, масштаб, покачивания)
+        self.cat_frames = []
         self.cat_photo_dim = None
+        self.cat_photo_normal = None
 
         cat_path = resource_path("cat.png")
         if os.path.exists(cat_path) and PIL_AVAILABLE:
@@ -157,12 +156,19 @@ class HuEvoClicker:
                 
                 self.cat_photo_normal = ImageTk.PhotoImage(pil_img)
 
-                # Кадр для прыжка (с фиксированными размерами, чтобы интерфейс не дергался)
-                bounced_img = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
-                bounced_img.paste(pil_img, (0, -2))
-                self.cat_photo_bounced = ImageTk.PhotoImage(bounced_img)
+                # Генерируем плавные кадры анимации
+                img_big = pil_img.resize((int(new_w * 1.2), int(new_h * 1.2)), Image.Resampling.LANCZOS)
+                img_tilt = pil_img.rotate(10, resample=Image.Resampling.BICUBIC, expand=False)
+                img_tilt2 = pil_img.rotate(-8, resample=Image.Resampling.BICUBIC, expand=False)
 
-                # Затемненная версия для неактивной вкладки
+                self.cat_frames = [
+                    self.cat_photo_normal,
+                    ImageTk.PhotoImage(img_big),
+                    ImageTk.PhotoImage(img_tilt),
+                    ImageTk.PhotoImage(img_tilt2),
+                    self.cat_photo_normal
+                ]
+
                 enhancer = ImageEnhance.Brightness(pil_img)
                 dimmed = enhancer.enhance(0.5)
                 self.cat_photo_dim = ImageTk.PhotoImage(dimmed)
@@ -242,13 +248,13 @@ class HuEvoClicker:
         for widget in (self.balance_card, self.balance_label):
             widget.bind("<Button-1>", lambda e: self.open_sync_modal())
 
-        # ---- Скрытая область подробной статистики (Overlay поверх всего) ----
+        # ---- Компактная область подробной статистики (продолжение кнопки баланса) ----
         self.stats_overlay = tk.Frame(main_frame, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         self.stats_overlay_content = tk.Label(
             self.stats_overlay, text="", bg=SURFACE, fg=TEXT,
-            font=("Consolas", 8), justify="left", padx=8, pady=6
+            font=("Consolas", 8), justify="left", anchor="w", padx=8, pady=4
         )
-        self.stats_overlay_content.pack(fill="both", expand=True)
+        self.stats_overlay_content.pack(fill="both", expand=True, anchor="w")
 
         # ---- Точки ----
         tk.Button(
@@ -392,30 +398,29 @@ class HuEvoClicker:
     def _on_card_enter(self, event):
         if self.tab_active:
             text = (
-                f" Сегодня:  {self.stat_day} / 90k\n"
-                f" Кликов:   {self.stat_clicks}\n"
-                f" Нарулил:  {self.stat_total}"
+                f"Седня {self.stat_day}/90k\n"
+                f"Кликов {self.stat_clicks}\n"
+                f"Нарулил {self.stat_total}"
             )
             self.stats_overlay_content.config(text=text)
-            # Разворачиваем поверх остальных объектов и поднимаем наверх (Z-index)
-            self.stats_overlay.place(x=12, y=55, relwidth=1, width=-24, height=135)
+            # Компактный блок выплывает прямо под плашкой баланса (высота всего 46 пикселей)
+            self.stats_overlay.place(x=12, y=34, relwidth=1, width=-24, height=46)
             self.stats_overlay.lift()
 
     def _on_card_leave(self, event):
         self.stats_overlay.place_forget()
 
     def _trigger_cat_bounce(self):
-        if not self.cat_photo_bounced:
+        if not self.cat_frames:
             return
-        try:
-            self.balance_label.config(image=self.cat_photo_bounced)
-            self.root.after(150, self._restore_cat)
-        except Exception:
-            pass
-
-    def _restore_cat(self):
-        if self.cat_photo_normal and self.tab_active:
-            self.balance_label.config(image=self.cat_photo_normal)
+        def play_frame(idx):
+            if idx < len(self.cat_frames):
+                self.balance_label.config(image=self.cat_frames[idx])
+                self.root.after(40, lambda: play_frame(idx + 1))
+            else:
+                if self.tab_active and self.cat_photo_normal:
+                    self.balance_label.config(image=self.cat_photo_normal)
+        play_frame(0)
 
     def toggle_timer_mode(self):
         if self.timer_mode == "fixed":
@@ -592,7 +597,7 @@ class HuEvoClicker:
                 )
                 self.balance_card.config(bg=SURFACE)
 
-                # Анимация прыжка кота только при изменении числа монеток
+                # Запускаем плавную анимацию кота строго при изменении баланса
                 if self.last_balance is not None and bal != self.last_balance:
                     self._trigger_cat_bounce()
                 self.last_balance = bal
@@ -605,9 +610,7 @@ class HuEvoClicker:
             if self.toast_anim_id:
                 self.root.after_cancel(self.toast_anim_id)
             
-            # При появлении тоаста о монетках также запускаем прыжок кота
             self._trigger_cat_bounce()
-
             self.toast_label.config(text=toast_str, bg=GREEN_COL, fg="#ffffff")
             
             def step_in(p):

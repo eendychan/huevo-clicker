@@ -180,8 +180,8 @@ class HuEvoClicker:
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(side="left")
 
-        # ---- Cookie ----
-        tk.Label(root, text="cookie session", bg=BG, fg=TEXT_MUTED,
+        # ---- Cookie / Auth ----
+        tk.Label(root, text="cookie / token", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TINY).pack(anchor="w", padx=10, pady=(4, 0))
 
         cookie_row = tk.Frame(root, bg=BG)
@@ -328,27 +328,51 @@ class HuEvoClicker:
         threading.Thread(target=self._refresh_balance_once, daemon=True).start()
 
     # ------------------------------------------------------
-    #  Баланс
+    #  Баланс (Интеграция с API Cloudflare Worker)
     # ------------------------------------------------------
     def _fetch_balance(self):
         cookie = self.session_cookie.strip()
         if not cookie:
             return None
         try:
+            # Запрос к вашему API на Cloudflare Workers
+            # Передаем токен/куку в заголовках и cookies на случай авторизации
             r = requests.get(
-                "https://huevo.su/clicker",
+                "https://huevo-docs.lunnaholy.workers.dev/apps/",
                 cookies={"session": cookie},
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers={
+                    "Authorization": f"Bearer {cookie}",
+                    "User-Agent": "Mozilla/5.0"
+                },
                 timeout=10,
             )
+            
             if r.status_code != 200:
                 return None
+            
+            # Пробуем распарсить как JSON (если воркер возвращает JSON-ответ)
+            try:
+                data = r.json()
+                # Ищем баланс/баллы в стандартных ключах ответа API
+                for key in ["points", "balance", "score", "coins"]:
+                    if key in data:
+                        return int(data[key])
+                # Если структура сложнее (например, внутри user)
+                if "user" in data and isinstance(data["user"], dict):
+                    for key in ["points", "balance", "score", "coins"]:
+                        if key in data["user"]:
+                            return int(data["user"][key])
+            except json.JSONDecodeError:
+                pass
+
+            # Запасной вариант: если API возвращает HTML-страницу, парсим через BeautifulSoup
             soup = BeautifulSoup(r.text, "html.parser")
-            el = soup.find("b", id="ck-balance")
+            el = soup.find(id=re.compile(r"balance|points|score", re.I))
             if el:
                 m = re.search(r"\d+", el.text.replace(" ", ""))
                 if m:
                     return int(m.group())
+                    
         except Exception:
             pass
         return None

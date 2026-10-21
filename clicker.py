@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import webbrowser
 import ctypes
 from ctypes import wintypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -99,7 +100,7 @@ ACCENT_HOV = "#4f46e5"
 GREEN      = "#10b981"
 RED        = "#ef4444"
 YELLOW     = "#f59e0b"
-TOAST_BG   = "#3c763d"  # Фирменный зеленый цвет уведомлений с сайта
+TOAST_BG   = "#3c763d"  # rgb(60, 118, 61)
 
 FONT_TITLE = ("Segoe UI", 10, "bold")
 FONT_BODY  = ("Segoe UI", 9)
@@ -123,13 +124,12 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("250x400")
+        self.root.geometry("250x390")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        self.toast_timer = None
-        self.last_toast_str = ""
+        self.toast_anim_id = None
 
         # Загрузка иконки котика (для плашки баланса и иконки окна)
         cat_path = resource_path("cat.png")
@@ -169,7 +169,7 @@ class HuEvoClicker:
 
         # Шапка (центрированный заголовок)
         header = tk.Frame(root, bg=BG)
-        header.pack(fill="x", padx=12, pady=(8, 2))
+        header.pack(fill="x", padx=12, pady=(6, 2))
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(anchor="center")
 
@@ -179,13 +179,13 @@ class HuEvoClicker:
             highlightbackground=BORDER, highlightthickness=1,
             cursor="hand2"
         )
-        self.balance_card.pack(fill="x", padx=12, pady=(2, 4))
+        self.balance_card.pack(fill="x", padx=12, pady=(2, 3))
 
         lbl_args = {
             "bg": SURFACE,
             "fg": TEXT_MUTED,
             "font": ("Consolas", 9, "bold"),
-            "pady": 6
+            "pady": 5
         }
         if self.cat_img:
             lbl_args["image"] = self.cat_img
@@ -208,7 +208,7 @@ class HuEvoClicker:
             activeforeground=TEXT, relief="flat", bd=0,
             font=FONT_BODY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
-        ).pack(fill="x", padx=12, pady=(2, 3), ipady=3)
+        ).pack(fill="x", padx=12, pady=(2, 2), ipady=2)
 
         list_wrap = tk.Frame(root, bg=SURFACE,
                              highlightbackground=BORDER, highlightthickness=1)
@@ -219,7 +219,7 @@ class HuEvoClicker:
             selectbackground=ACCENT, selectforeground="#fff",
             bd=0, highlightthickness=0, font=FONT_MONO, activestyle="none",
         )
-        self.listbox.pack(fill="x", padx=4, pady=3)
+        self.listbox.pack(fill="x", padx=4, pady=2)
 
         tk.Button(
             root, text="✕  Очистить", command=self.clear_points,
@@ -231,7 +231,7 @@ class HuEvoClicker:
 
         # ---- Параметры таймера ----
         self.params_parent = tk.Frame(root, bg=BG)
-        self.params_parent.pack(fill="x", padx=12, pady=(4, 1))
+        self.params_parent.pack(fill="x", padx=12, pady=(3, 1))
 
         # 1. Фиксированный режим (м, с, мс)
         self.fixed_container = tk.Frame(self.params_parent, bg=BG)
@@ -291,7 +291,7 @@ class HuEvoClicker:
             font=FONT_TINY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
         )
-        self.mode_btn.pack(fill="x", padx=12, pady=(2, 3), ipady=2)
+        self.mode_btn.pack(fill="x", padx=12, pady=(2, 2), ipady=1)
 
         # ---- Статус ----
         self.pill = tk.Label(
@@ -308,17 +308,26 @@ class HuEvoClicker:
             relief="flat", bd=0, cursor="hand2",
             font=("Segoe UI", 9, "bold"),
         )
-        self.start_btn.pack(fill="x", padx=12, pady=(0, 2), ipady=5)
+        self.start_btn.pack(fill="x", padx=12, pady=(0, 2), ipady=4)
 
-        # ---- Поле для всплывающих уведомлений (тоастов) под кнопкой старт ----
-        self.toast_label = tk.Label(
-            root, text="", bg=BG, fg=TEXT_MUTED,
-            font=("Segoe UI", 8, "bold"), wraplength=220, justify="center", bd=0
-        )
-        self.toast_label.pack(fill="x", padx=12, pady=(2, 2))
-
+        # ---- Нижняя часть: Хоткеи, Кнопка Проебать и Уведомление на самом краю ----
         tk.Label(root, text="F2 — точка · F6 — старт/стоп",
-                 bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 2))
+                 bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(1, 1))
+
+        tk.Button(
+            root, text="Проебать", command=lambda: webbrowser.open("https://huevo.su/apps/1"),
+            bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
+            activeforeground=TEXT, relief="flat", bd=0,
+            font=FONT_TINY, cursor="hand2", highlightthickness=1,
+            highlightbackground=BORDER,
+        ).pack(fill="x", padx=12, pady=(1, 0), ipady=1)
+
+        # Уведомление (расположено в самом низу окна, анимируется через pady)
+        self.toast_label = tk.Label(
+            root, text="", bg=BG, fg=BG,
+            font=("Segoe UI", 8, "bold"), anchor="center", bd=0, pady=0
+        )
+        self.toast_label.pack(side="bottom", fill="x")
 
     # ------------------------------------------------------
     #  Переключение режимов единой кнопкой
@@ -362,7 +371,6 @@ class HuEvoClicker:
             font=FONT_TINY, justify="left"
         ).pack(anchor="w", padx=16, pady=(0, 8))
 
-        # Шапка для кода скрипта с кнопкой быстрого копирования (иконка)
         code_header = tk.Frame(modal, bg=BG)
         code_header.pack(fill="x", padx=16, pady=(0, 2))
 
@@ -409,7 +417,6 @@ class HuEvoClicker:
             "})();"
         )
 
-        # Квадратная маленькая кнопка с иконкой копирования
         copy_icon_btn = tk.Button(
             code_header, text="📋", 
             command=lambda: self._copy_to_clipboard(script_code, copy_icon_btn, is_icon=True),
@@ -430,7 +437,6 @@ class HuEvoClicker:
         script_box.insert("1.0", script_code)
         script_box.config(state="disabled")
 
-        # Дополнительная кнопка копирования внизу
         copy_btn = tk.Button(
             modal, text="Скопировать скрипт полностью", 
             command=lambda: self._copy_to_clipboard(script_code, copy_btn, is_icon=False),
@@ -497,24 +503,35 @@ class HuEvoClicker:
         except Exception:
             pass
 
+    # Плавное выдвигание и задвигание уведомления (через изменение pady)
     def _show_toast(self, toast_str):
         def _do():
-            if self.toast_timer:
-                self.root.after_cancel(self.toast_timer)
+            if self.toast_anim_id:
+                self.root.after_cancel(self.toast_anim_id)
             
-            self.toast_label.config(
-                text=toast_str, bg=TOAST_BG, fg="#ffffff", padx=8, pady=4
-            )
-            # Уведомление висит 6 секунд, после чего плавно скрывается
-            self.toast_timer = self.root.after(6000, self._clear_toast)
+            self.toast_label.config(text=toast_str, bg=TOAST_BG, fg="#ffffff")
+            
+            def step_in(p):
+                if p <= 5:
+                    self.toast_label.config(pady=p)
+                    self.toast_anim_id = self.root.after(15, lambda: step_in(p + 1))
+                else:
+                    self.toast_anim_id = self.root.after(5000, lambda: step_out(5))
+
+            def step_out(p):
+                if p >= 0:
+                    self.toast_label.config(pady=p)
+                    self.toast_anim_id = self.root.after(15, lambda: step_out(p - 1))
+                else:
+                    self.toast_label.config(text="", bg=BG, fg=BG, pady=0)
+                    self.toast_anim_id = None
+
+            step_in(0)
+
         try:
             self.root.after(0, _do)
         except tk.TclError:
             pass
-
-    def _clear_toast(self):
-        self.toast_label.config(text="", bg=BG, fg=TEXT_MUTED, padx=0, pady=0)
-        self.toast_timer = None
 
     def _connection_checker(self):
         while True:

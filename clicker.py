@@ -87,10 +87,9 @@ _SCREEN_H = user32.GetSystemMetrics(1)
 
 
 # ==========================================================
-#  Конфиг (сохранение cookie рядом с exe)
+#  Конфиг (сохранение настроек рядом с exe)
 # ==========================================================
 def _app_dir():
-    """Папка рядом с exe (для PyInstaller --onefile) или рядом со скриптом."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
@@ -142,7 +141,7 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("240x400")
+        self.root.geometry("240x460")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
@@ -151,15 +150,18 @@ class HuEvoClicker:
         self.is_running = False
         self.thread = None
         self.timer_mode = "fixed"
+        self.auth_method = "login"  # "login" или "cookie"
 
-        # cookie + блокировка
+        # Данные авторизации
         self.session_cookie = ""
-        self._balance_lock = threading.Lock()
+        self.saved_username = ""
         self._balance_stop = False
 
-        # загрузка конфига
+        # Загрузка конфига
         cfg = load_config()
         self.session_cookie = cfg.get("session", "")
+        self.saved_username = cfg.get("username", "")
+        self.auth_method = cfg.get("auth_mode", "login")
 
         self._build_ui()
 
@@ -180,37 +182,91 @@ class HuEvoClicker:
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(side="left")
 
-        # ---- Cookie / Auth ----
-        tk.Label(root, text="cookie / token", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(anchor="w", padx=10, pady=(4, 0))
+        # ---- Переключатель метода авторизации ----
+        auth_switch_frame = tk.Frame(root, bg=BG)
+        auth_switch_frame.pack(fill="x", padx=10, pady=(2, 2))
 
-        cookie_row = tk.Frame(root, bg=BG)
-        cookie_row.pack(fill="x", padx=10, pady=(2, 4))
+        self.btn_auth_login = tk.Button(
+            auth_switch_frame, text="Логин / Пароль", command=lambda: self._set_auth_method("login"),
+            bg=ACCENT if self.auth_method == "login" else SURFACE_2,
+            fg="#fff" if self.auth_method == "login" else TEXT_MUTED,
+            relief="flat", bd=0, font=("Segoe UI", 8, "bold"), cursor="hand2"
+        )
+        self.btn_auth_login.pack(side="left", fill="x", expand=True, ipady=2, padx=(0, 2))
+
+        self.btn_auth_cookie = tk.Button(
+            auth_switch_frame, text="Cookie", command=lambda: self._set_auth_method("cookie"),
+            bg=ACCENT if self.auth_method == "cookie" else SURFACE_2,
+            fg="#fff" if self.auth_method == "cookie" else TEXT_MUTED,
+            relief="flat", bd=0, font=("Segoe UI", 8, "bold"), cursor="hand2"
+        )
+        self.btn_auth_cookie.pack(side="left", fill="x", expand=True, ipady=2, padx=(2, 0))
+
+        # ---- Контейнер полей авторизации ----
+        self.auth_container = tk.Frame(root, bg=BG)
+        self.auth_container.pack(fill="x", padx=10, pady=(2, 4))
+
+        # Блок входа по логину и паролю
+        self.login_frame = tk.Frame(self.auth_container, bg=BG)
+        
+        tk.Label(self.login_frame, text="логин / почта", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(anchor="w")
+        self.username_var = tk.StringVar(value=self.saved_username)
+        tk.Entry(
+            self.login_frame, textvariable=self.username_var,
+            bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
+            relief="flat", font=FONT_MONO, bd=0,
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT
+        ).pack(fill="x", ipady=2, pady=(1, 3))
+
+        tk.Label(self.login_frame, text="пароль", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(anchor="w")
+        self.password_var = tk.StringVar()
+        pass_row = tk.Frame(self.login_frame, bg=BG)
+        pass_row.pack(fill="x", pady=(1, 2))
+
+        self.pass_entry = tk.Entry(
+            pass_row, textvariable=self.password_var, show="•",
+            bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
+            relief="flat", font=FONT_MONO, bd=0,
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT
+        )
+        self.pass_entry.pack(side="left", fill="x", expand=True, ipady=2)
+
+        tk.Button(
+            pass_row, text="Войти", command=self._login_to_huevo,
+            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV,
+            activeforeground="#fff", relief="flat", bd=0,
+            font=("Segoe UI", 8, "bold"), cursor="hand2", padx=8
+        ).pack(side="left", padx=(4, 0), ipady=2)
+
+        # Блок входа по Cookie
+        self.cookie_frame = tk.Frame(self.auth_container, bg=BG)
+        tk.Label(self.cookie_frame, text="cookie session", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(anchor="w")
+        cookie_row = tk.Frame(self.cookie_frame, bg=BG)
+        cookie_row.pack(fill="x", pady=(1, 2))
 
         self.cookie_var = tk.StringVar(value=self.session_cookie)
-        cookie_entry = tk.Entry(
+        tk.Entry(
             cookie_row, textvariable=self.cookie_var, show="•",
             bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
             relief="flat", font=FONT_MONO, bd=0,
-            highlightthickness=1, highlightbackground=BORDER,
-            highlightcolor=ACCENT,
-        )
-        cookie_entry.pack(side="left", fill="x", expand=True, ipady=3)
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT
+        ).pack(side="left", fill="x", expand=True, ipady=2)
 
         tk.Button(
             cookie_row, text="OK", command=self._apply_cookie,
             bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV,
             activeforeground="#fff", relief="flat", bd=0,
-            font=("Segoe UI", 8, "bold"), cursor="hand2",
-            padx=8,
-        ).pack(side="left", padx=(4, 0), ipady=3)
+            font=("Segoe UI", 8, "bold"), cursor="hand2", padx=8
+        ).pack(side="left", padx=(4, 0), ipady=2)
+
+        self._refresh_auth_view()
 
         # ---- Баланс ----
         self.balance_label = tk.Label(
             root, text="💰 ---", bg=BG, fg=ACCENT,
             font=("Consolas", 12, "bold"),
         )
-        self.balance_label.pack(pady=(2, 6))
+        self.balance_label.pack(pady=(2, 4))
 
         # ---- Точки ----
         tk.Button(
@@ -314,8 +370,27 @@ class HuEvoClicker:
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
 
     # ------------------------------------------------------
-    #  Cookie
+    #  Методы авторизации
     # ------------------------------------------------------
+    def _set_auth_method(self, method):
+        self.auth_method = method
+        cfg = load_config()
+        cfg["auth_mode"] = method
+        save_config(cfg)
+        self._refresh_auth_view()
+
+    def _refresh_auth_view(self):
+        if self.auth_method == "login":
+            self.btn_auth_login.config(bg=ACCENT, fg="#fff")
+            self.btn_auth_cookie.config(bg=SURFACE_2, fg=TEXT_MUTED)
+            self.cookie_frame.pack_forget()
+            self.login_frame.pack(fill="x", expand=True)
+        else:
+            self.btn_auth_login.config(bg=SURFACE_2, fg=TEXT_MUTED)
+            self.btn_auth_cookie.config(bg=ACCENT, fg="#fff")
+            self.login_frame.pack_forget()
+            self.cookie_frame.pack(fill="x", expand=True)
+
     def _apply_cookie(self):
         value = self.cookie_var.get().strip()
         self.session_cookie = value
@@ -324,55 +399,81 @@ class HuEvoClicker:
         cfg["session"] = value
         save_config(cfg)
 
-        # мгновенно дёргаем баланс, не дожидаясь следующего тика
         threading.Thread(target=self._refresh_balance_once, daemon=True).start()
 
+    def _login_to_huevo(self):
+        username = self.username_var.get().strip()
+        password = self.password_var.get().strip()
+
+        if not username or not password:
+            self._update_status_msg("⚠ Введите логин/пароль", YELLOW)
+            return
+
+        def _do_login():
+            try:
+                session = requests.Session()
+                r = session.post(
+                    "https://huevo.su/login",
+                    data={"username": username, "password": password},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    allow_redirects=True,
+                    timeout=10
+                )
+                
+                cookie_val = None
+                for c in session.cookies:
+                    if "session" in c.name.lower() or "sid" in c.name.lower() or "auth" in c.name.lower():
+                        cookie_val = c.value
+                        break
+                
+                if not cookie_val and session.cookies.get_dict():
+                    cookie_val = list(session.cookies.get_dict().values())[0]
+
+                if cookie_val:
+                    self.session_cookie = cookie_val
+                    cfg = load_config()
+                    cfg["session"] = cookie_val
+                    cfg["username"] = username
+                    save_config(cfg)
+                    self._update_status_msg("● Вход успешен", GREEN)
+                    self._refresh_balance_once()
+                else:
+                    self._update_status_msg("⚠ Ошибка входа", RED)
+            except Exception:
+                self._update_status_msg("⚠ Ошибка сети", RED)
+
+        threading.Thread(target=_do_login, daemon=True).start()
+
+    def _update_status_msg(self, text, bg_color):
+        def _do():
+            self.pill.config(text=text, bg=bg_color)
+        try:
+            self.root.after(0, _do)
+        except tk.TclError:
+            pass
+
     # ------------------------------------------------------
-    #  Баланс (Интеграция с API Cloudflare Worker)
+    #  Баланс
     # ------------------------------------------------------
     def _fetch_balance(self):
         cookie = self.session_cookie.strip()
         if not cookie:
             return None
         try:
-            # Запрос к вашему API на Cloudflare Workers
-            # Передаем токен/куку в заголовках и cookies на случай авторизации
             r = requests.get(
-                "https://huevo-docs.lunnaholy.workers.dev/apps/",
+                "https://huevo.su/clicker",
                 cookies={"session": cookie},
-                headers={
-                    "Authorization": f"Bearer {cookie}",
-                    "User-Agent": "Mozilla/5.0"
-                },
+                headers={"User-Agent": "Mozilla/5.0"},
                 timeout=10,
             )
-            
             if r.status_code != 200:
                 return None
-            
-            # Пробуем распарсить как JSON (если воркер возвращает JSON-ответ)
-            try:
-                data = r.json()
-                # Ищем баланс/баллы в стандартных ключах ответа API
-                for key in ["points", "balance", "score", "coins"]:
-                    if key in data:
-                        return int(data[key])
-                # Если структура сложнее (например, внутри user)
-                if "user" in data and isinstance(data["user"], dict):
-                    for key in ["points", "balance", "score", "coins"]:
-                        if key in data["user"]:
-                            return int(data["user"][key])
-            except json.JSONDecodeError:
-                pass
-
-            # Запасной вариант: если API возвращает HTML-страницу, парсим через BeautifulSoup
             soup = BeautifulSoup(r.text, "html.parser")
-            el = soup.find(id=re.compile(r"balance|points|score", re.I))
+            el = soup.find("b", id="ck-balance")
             if el:
                 m = re.search(r"\d+", el.text.replace(" ", ""))
                 if m:
                     return int(m.group())
-                    
         except Exception:
             pass
         return None
@@ -398,7 +499,6 @@ class HuEvoClicker:
         while not self._balance_stop:
             bal = self._fetch_balance()
             self._update_balance_label(bal)
-            # спим 20 секунд, но просыпаемся чаще, чтобы успеть отреагировать
             for _ in range(40):
                 if self._balance_stop:
                     return

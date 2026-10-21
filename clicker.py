@@ -2,6 +2,7 @@ import tkinter as tk
 import keyboard
 import threading
 import time
+import random
 import ctypes
 from ctypes import wintypes
 
@@ -11,7 +12,6 @@ from ctypes import wintypes
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 winmm  = ctypes.WinDLL("winmm",  use_last_error=True)
 
-# Точность системного таймера → 1 мс (по умолчанию 15.6 мс)
 try:
     winmm.timeBeginPeriod(1)
 except Exception:
@@ -53,10 +53,6 @@ def get_cursor_pos():
 
 
 def _build_click_inputs(x, y, screen_w, screen_h):
-    """
-    Один SendInput-массив: перемещение + DOWN + UP.
-    Координаты нормализуются в 0..65535 — так требует MOUSEEVENTF_ABSOLUTE.
-    """
     ax = int(x * 65535 / max(1, screen_w - 1))
     ay = int(y * 65535 / max(1, screen_h - 1))
 
@@ -79,7 +75,6 @@ def _build_click_inputs(x, y, screen_w, screen_h):
     return (INPUT * 3)(move, down, up)
 
 
-# Кэш на размер экрана — не дёргаем GetSystemMetrics в горячем цикле
 _SCREEN_W = user32.GetSystemMetrics(0)
 _SCREEN_H = user32.GetSystemMetrics(1)
 
@@ -111,7 +106,7 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("220x290")
+        self.root.geometry("220x330")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
@@ -119,6 +114,7 @@ class HuEvoClicker:
         self.points = []
         self.is_running = False
         self.thread = None
+        self.timer_mode = "fixed"   # "fixed" | "random"
 
         self._build_ui()
 
@@ -136,7 +132,7 @@ class HuEvoClicker:
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(side="left")
 
-        # Точки
+        # ---- Точки ----
         tk.Button(
             root, text="+  Добавить точку (F2)", command=self.add_point,
             bg=SURFACE_2, fg=TEXT, activebackground=ACCENT_HOV,
@@ -164,7 +160,7 @@ class HuEvoClicker:
             highlightbackground=BORDER,
         ).pack(fill="x", padx=10, pady=(4, 0), ipady=2)
 
-        # Интервал
+        # ---- Интервал: строка 1 (фикс) + переключатель ----
         tf = tk.Frame(root, bg=BG)
         tf.pack(fill="x", padx=10, pady=(6, 2))
 
@@ -172,8 +168,10 @@ class HuEvoClicker:
         self.sec_var = tk.StringVar(value="0")
         self.ms_var  = tk.StringVar(value="50")
 
-        def entry(parent, var):
-            e = tk.Entry(parent, textvariable=var, width=3, justify="center",
+        self.fixed_entries = []
+
+        def entry(parent, var, width=3):
+            e = tk.Entry(parent, textvariable=var, width=width, justify="center",
                          bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
                          relief="flat", font=FONT_MONO, bd=0,
                          highlightthickness=1, highlightbackground=BORDER,
@@ -181,24 +179,52 @@ class HuEvoClicker:
             e.pack(side="left", ipady=2, padx=(0, 1))
             return e
 
-        entry(tf, self.min_var)
+        self.fixed_entries.append(entry(tf, self.min_var))
         tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TINY).pack(side="left", padx=(0, 4))
-        entry(tf, self.sec_var)
+        self.fixed_entries.append(entry(tf, self.sec_var))
         tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED,
                  font=FONT_TINY).pack(side="left", padx=(0, 4))
-        entry(tf, self.ms_var)
+        self.fixed_entries.append(entry(tf, self.ms_var))
         tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED,
-                 font=FONT_TINY).pack(side="left")
+                 font=FONT_TINY).pack(side="left", padx=(0, 6))
 
-        # Статус
+        # Переключатель Фикс / Рандом — справа
+        self.mode_switch = self._make_switch(tf)
+        self.mode_switch.pack(side="left")
+
+        # ---- Интервал: строка 2 (рандом, скрыта пока) ----
+        self.rand_frame = tk.Frame(root, bg=BG)
+
+        self.rand_min_var = tk.StringVar(value="30")
+        self.rand_max_var = tk.StringVar(value="120")
+
+        def rentry(parent, var):
+            e = tk.Entry(parent, textvariable=var, width=5, justify="center",
+                         bg=SURFACE_2, fg=TEXT, insertbackground=TEXT,
+                         relief="flat", font=FONT_MONO, bd=0,
+                         highlightthickness=1, highlightbackground=BORDER,
+                         highlightcolor=ACCENT)
+            e.pack(side="left", ipady=2, padx=(0, 1))
+            return e
+
+        tk.Label(self.rand_frame, text="от", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(0, 2))
+        rentry(self.rand_frame, self.rand_min_var)
+        tk.Label(self.rand_frame, text="до", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(4, 2))
+        rentry(self.rand_frame, self.rand_max_var)
+        tk.Label(self.rand_frame, text="мс", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(2, 0))
+
+        # ---- Статус ----
         self.pill = tk.Label(
             root, text="●  Выкл", bg=RED, fg="#fff",
             font=("Segoe UI", 8, "bold"), padx=8, pady=2,
         )
-        self.pill.pack(pady=(6, 4))
+        self.pill.pack(pady=(8, 4))
 
-        # Кнопка
+        # ---- Старт ----
         self.start_btn = tk.Button(
             root, text="▶  Старт (F6)", command=self.toggle_clicking,
             bg=ACCENT, fg="#fff",
@@ -212,6 +238,54 @@ class HuEvoClicker:
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
 
     # ------------------------------------------------------
+    #  Переключатель Фикс / Рандом
+    # ------------------------------------------------------
+    def _make_switch(self, parent):
+        """
+        Компактный двухпозиционный переключатель:
+        [ Ф ] [ Р ]  — активная половинка подсвечена.
+        """
+        wrap = tk.Frame(parent, bg=SURFACE_2,
+                        highlightbackground=BORDER, highlightthickness=1)
+
+        self.sw_fixed  = tk.Label(wrap, text="Ф", bg=ACCENT, fg="#fff",
+                                  font=("Segoe UI", 8, "bold"),
+                                  width=2, cursor="hand2")
+        self.sw_random = tk.Label(wrap, text="Р", bg=SURFACE_2, fg=TEXT_MUTED,
+                                  font=("Segoe UI", 8, "bold"),
+                                  width=2, cursor="hand2")
+        self.sw_fixed.pack(side="left")
+        self.sw_random.pack(side="left")
+
+        self.sw_fixed.bind("<Button-1>",  lambda e: self._set_timer_mode("fixed"))
+        self.sw_random.bind("<Button-1>", lambda e: self._set_timer_mode("random"))
+        return wrap
+
+    def _set_timer_mode(self, mode):
+        self.timer_mode = mode
+
+        if mode == "fixed":
+            self.sw_fixed.config(bg=ACCENT, fg="#fff")
+            self.sw_random.config(bg=SURFACE_2, fg=TEXT_MUTED)
+            self.rand_frame.pack_forget()
+        else:
+            self.sw_fixed.config(bg=SURFACE_2, fg=TEXT_MUTED)
+            self.sw_random.config(bg=ACCENT, fg="#fff")
+            # вставляем сразу под строкой фикс-интервала
+            self.rand_frame.pack(fill="x", padx=10, pady=(2, 0),
+                                 after=self._fixed_row_widget())
+
+    def _fixed_row_widget(self):
+        # Найти родительский фрейм строки фикс-интервала (первый child header'а после точек)
+        for child in self.root.winfo_children():
+            if isinstance(child, tk.Frame) and child.winfo_children():
+                for sub in child.winfo_children():
+                    if sub is self.min_var:
+                        return child
+        # fallback — просто последний фрейм
+        return self.root.winfo_children()[-3]
+
+    # ------------------------------------------------------
     def add_point(self):
         x, y = get_cursor_pos()
         self.points.append((x, y))
@@ -221,7 +295,9 @@ class HuEvoClicker:
         self.points.clear()
         self.listbox.delete(0, tk.END)
 
+    # ------------------------------------------------------
     def get_interval_seconds(self):
+        """Фикс-интервал в секундах."""
         try:
             m  = int(self.min_var.get() or 0)
             s  = int(self.sec_var.get() or 0)
@@ -230,6 +306,18 @@ class HuEvoClicker:
             return total if total > 0 else 0.0
         except ValueError:
             return 0.0
+
+    def get_random_interval_seconds(self):
+        """Случайный интервал в секундах из диапазона [rand_min, rand_max] мс."""
+        try:
+            lo = int(self.rand_min_var.get() or 0)
+            hi = int(self.rand_max_var.get() or 0)
+        except ValueError:
+            return 0.0
+        if lo < 0: lo = 0
+        if hi < lo: lo, hi = hi, lo
+        # random.randint включает оба конца
+        return random.randint(lo, hi) / 1000.0
 
     # ------------------------------------------------------
     def toggle_clicking(self):
@@ -262,39 +350,39 @@ class HuEvoClicker:
         points = self.points
         sw, sh = _SCREEN_W, _SCREEN_H
 
-        # Предсобираем INPUT-массивы для каждой точки один раз
-        cache = {}
-        for p in points:
-            cache[p] = _build_click_inputs(p[0], p[1], sw, sh)
-
+        cache = {p: _build_click_inputs(p[0], p[1], sw, sh) for p in points}
         n = len(points)
         i = 0
-        next_t = time.perf_counter()
         tick = 0
+        next_t = time.perf_counter()
 
         while self.is_running:
-            interval = self.get_interval_seconds()
-
             p = points[i % n]
-            arr = cache[p]
-            send_input(3, arr, ctypes.sizeof(INPUT))
+            send_input(3, cache[p], ctypes.sizeof(INPUT))
             i += 1
 
-            # Планируем следующий клик по абсолютному времени
-            if interval > 0:
-                next_t += interval
-                now = time.perf_counter()
-                if next_t > now:
-                    time.sleep(next_t - now)
+            if self.timer_mode == "random":
+                # каждый интервал — новое случайное значение
+                delay = self.get_random_interval_seconds()
+                if delay > 0:
+                    time.sleep(delay)
                 else:
-                    # отстали — сбрасываем базу, чтобы не копить дрейф
-                    next_t = now
+                    tick += 1
+                    if (tick & 31) == 0:
+                        time.sleep(0)
             else:
-                # «0 мс» — максимальный темп; раз в 32 клика отдаём квант,
-                # чтобы UI не подвешивался
-                tick += 1
-                if (tick & 31) == 0:
-                    time.sleep(0)
+                interval = self.get_interval_seconds()
+                if interval > 0:
+                    next_t += interval
+                    now = time.perf_counter()
+                    if next_t > now:
+                        time.sleep(next_t - now)
+                    else:
+                        next_t = now
+                else:
+                    tick += 1
+                    if (tick & 31) == 0:
+                        time.sleep(0)
 
 
 if __name__ == "__main__":

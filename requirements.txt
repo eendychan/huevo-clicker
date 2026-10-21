@@ -1,2 +1,3 @@
 keyboard==0.13.5
 pyinstaller==6.6.0
+cdpify[websocket]>=0.3.0

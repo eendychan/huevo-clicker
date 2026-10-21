@@ -9,9 +9,8 @@ import re
 import sys
 import ctypes
 from ctypes import wintypes
-
-from tkinterweb import HtmlFrame
-from bs4 import BeautifulSoup
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import urllib.parse
 
 # ==========================================================
 #  WinAPI
@@ -87,34 +86,6 @@ _SCREEN_H = user32.GetSystemMetrics(1)
 
 
 # ==========================================================
-#  Конфиг
-# ==========================================================
-def _app_dir():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-CONFIG_PATH = os.path.join(_app_dir(), "huEvoClicker.config.json")
-
-
-def load_config():
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_config(cfg):
-    try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-# ==========================================================
 #  Палитра
 # ==========================================================
 BG         = "#1e1f22"
@@ -141,82 +112,59 @@ class HuEvoClicker:
     def __init__(self, root):
         self.root = root
         self.root.title("huEVO clicker")
-        self.root.geometry("600x520")  # Увеличено окно для размещения браузера
+        self.root.geometry("240x420")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
-        self.root.resizable(True, True)
+        self.root.resizable(False, False)
 
         self.points = []
         self.is_running = False
         self.thread = None
         self.timer_mode = "fixed"
+        self.last_update_time = 0
 
         self._build_ui()
 
         keyboard.add_hotkey('F2', self.add_point)
         keyboard.add_hotkey('F6', self.toggle_clicking)
 
-        # Запускаем браузер на странице кликера
-        self.html_frame.load_website("https://huevo.su/clicker")
-
-        # Автоматическое считывание баланса и перезагрузка каждые 15 секунд
-        self.root.after(5000, self._auto_refresh_web_balance)
+        # Запускаем локальный HTTP-сервер для приёма баланса из браузера
+        threading.Thread(target=self._start_local_server, daemon=True).start()
+        # Запускаем проверку актуальности связи (если вкладка закрыта — статус сбрасывается)
+        threading.Thread(target=self._connection_checker, daemon=True).start()
 
     # ------------------------------------------------------
     def _build_ui(self):
         root = self.root
 
-        # Левая панель (управление кликером)
-        left_panel = tk.Frame(root, bg=BG, width=240)
-        left_panel.pack(side="left", fill="y", padx=10, pady=8)
-        left_panel.pack_propagate(False)
-
-        # Правая панель (Встроенный браузер)
-        right_panel = tk.Frame(root, bg=SURFACE_2, highlightbackground=BORDER, highlightthickness=1)
-        right_panel.pack(side="right", fill="both", expand=True, padx=(0, 10), pady=8)
-
-        # ---- Браузер ----
-        web_header = tk.Frame(right_panel, bg=SURFACE_2)
-        web_header.pack(fill="x", padx=4, pady=2)
-        
-        tk.Label(web_header, text="Встроенный сайт (huevo.su)", bg=SURFACE_2, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left")
-        
-        tk.Button(
-            web_header, text="↻ Обновить", command=self._refresh_browser,
-            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
-            relief="flat", bd=0, font=("Segoe UI", 8, "bold"), cursor="hand2", padx=6
-        ).pack(side="right")
-
-        self.html_frame = HtmlFrame(right_panel, messages_enabled=False)
-        self.html_frame.pack(fill="both", expand=True)
-
-        # ---- Левая панель: Заголовок ----
-        header = tk.Frame(left_panel, bg=BG)
-        header.pack(fill="x", pady=(0, 4))
+        header = tk.Frame(root, bg=BG)
+        header.pack(fill="x", padx=10, pady=(8, 4))
         tk.Label(header, text="✦", bg=BG, fg=ACCENT,
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(0, 4))
         tk.Label(header, text="huEVO clicker", bg=BG, fg=TEXT,
                  font=FONT_TITLE).pack(side="left")
 
-        # ---- Баланс ----
+        # ---- Индикатор и Баланс ----
         self.balance_label = tk.Label(
-            left_panel, text="💰 ---", bg=BG, fg=ACCENT,
-            font=("Consolas", 12, "bold"),
+            root, text="💰 Ожидание вклада...", bg=BG, fg=TEXT_MUTED,
+            font=("Consolas", 10, "bold"),
         )
-        self.balance_label.pack(pady=(4, 6))
+        self.balance_label.pack(pady=(8, 2))
+
+        tk.Label(root, text="Откройте huevo.su/clicker в браузере", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
 
         # ---- Точки ----
         tk.Button(
-            left_panel, text="+ Добавить точку (F2)", command=self.add_point,
+            root, text="+  Добавить точку (F2)", command=self.add_point,
             bg=SURFACE_2, fg=TEXT, activebackground=ACCENT_HOV,
             activeforeground="#fff", relief="flat", bd=0,
             font=FONT_BODY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
-        ).pack(fill="x", pady=(2, 4), ipady=4)
+        ).pack(fill="x", padx=10, pady=(2, 4), ipady=4)
 
-        list_wrap = tk.Frame(left_panel, bg=SURFACE_2,
+        list_wrap = tk.Frame(root, bg=SURFACE_2,
                              highlightbackground=BORDER, highlightthickness=1)
-        list_wrap.pack(fill="x")
+        list_wrap.pack(fill="x", padx=10)
 
         self.listbox = tk.Listbox(
             list_wrap, height=4, bg=SURFACE_2, fg=TEXT,
@@ -226,16 +174,16 @@ class HuEvoClicker:
         self.listbox.pack(fill="x", padx=4, pady=4)
 
         tk.Button(
-            left_panel, text="✕ Очистить", command=self.clear_points,
+            root, text="✕  Очистить", command=self.clear_points,
             bg=SURFACE_2, fg=TEXT_MUTED, activebackground="#3a3d43",
             activeforeground=TEXT, relief="flat", bd=0,
             font=FONT_TINY, cursor="hand2", highlightthickness=1,
             highlightbackground=BORDER,
-        ).pack(fill="x", pady=(4, 0), ipady=2)
+        ).pack(fill="x", padx=10, pady=(4, 0), ipady=2)
 
-        # ---- Интервал ----
-        tf = tk.Frame(left_panel, bg=BG)
-        tf.pack(fill="x", pady=(6, 2))
+        # ---- Интервал (фикс) + переключатель ----
+        tf = tk.Frame(root, bg=BG)
+        tf.pack(fill="x", padx=10, pady=(6, 2))
 
         self.min_var = tk.StringVar(value="0")
         self.sec_var = tk.StringVar(value="0")
@@ -251,17 +199,20 @@ class HuEvoClicker:
             return e
 
         entry(tf, self.min_var)
-        tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
+        tk.Label(tf, text="м", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(0, 4))
         entry(tf, self.sec_var)
-        tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 4))
+        tk.Label(tf, text="с", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(0, 4))
         entry(tf, self.ms_var)
-        tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 6))
+        tk.Label(tf, text="мс", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(0, 6))
 
         self.mode_switch = self._make_switch(tf)
         self.mode_switch.pack(side="left")
 
         # ---- Рандом ----
-        self.rand_frame = tk.Frame(left_panel, bg=BG)
+        self.rand_frame = tk.Frame(root, bg=BG)
         self.rand_min_var = tk.StringVar(value="30")
         self.rand_max_var = tk.StringVar(value="120")
 
@@ -274,69 +225,100 @@ class HuEvoClicker:
             e.pack(side="left", ipady=2, padx=(0, 1))
             return e
 
-        tk.Label(self.rand_frame, text="от", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(0, 2))
+        tk.Label(self.rand_frame, text="от", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(0, 2))
         rentry(self.rand_frame, self.rand_min_var)
-        tk.Label(self.rand_frame, text="до", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(4, 2))
+        tk.Label(self.rand_frame, text="до", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(4, 2))
         rentry(self.rand_frame, self.rand_max_var)
-        tk.Label(self.rand_frame, text="мс", bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(side="left", padx=(2, 0))
+        tk.Label(self.rand_frame, text="мс", bg=BG, fg=TEXT_MUTED,
+                 font=FONT_TINY).pack(side="left", padx=(2, 0))
 
         # ---- Статус ----
         self.pill = tk.Label(
-            left_panel, text="● Выкл", bg=RED, fg="#fff",
+            root, text="●  Выкл", bg=RED, fg="#fff",
             font=("Segoe UI", 8, "bold"), padx=8, pady=2,
         )
         self.pill.pack(pady=(6, 4))
 
         # ---- Старт ----
         self.start_btn = tk.Button(
-            left_panel, text="▶ Старт (F6)", command=self.toggle_clicking,
+            root, text="▶  Старт (F6)", command=self.toggle_clicking,
             bg=ACCENT, fg="#fff",
             activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, cursor="hand2",
             font=("Unbounded", 8, "bold"),
         )
-        self.start_btn.pack(fill="x", pady=(0, 6), ipady=6)
+        self.start_btn.pack(fill="x", padx=10, pady=(0, 6), ipady=6)
 
-        tk.Label(left_panel, text="F2 — точка · F6 — старт/стоп",
+        tk.Label(root, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 6))
 
     # ------------------------------------------------------
-    #  Логика взаимодействия с встроенным браузером
+    #  Локальный сервер для приема данных от браузера
     # ------------------------------------------------------
-    def _refresh_browser(self):
-        """Ручная или автоматическая перезагрузка браузера"""
-        self.html_frame.load_website("https://huevo.su/clicker")
+    def _start_local_server(self):
+        outer = self
+        class LocalHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path == "/update":
+                    query = urllib.parse.parse_qs(parsed.query)
+                    if "balance" in query:
+                        bal_str = query["balance"][0]
+                        outer._update_balance_from_web(bal_str)
+                
+                self.send_response(200)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b"OK")
 
-    def _auto_refresh_web_balance(self):
-        """Парсинг HTML внутри встроенного браузера и автообновление"""
+            def log_message(self, format, *args):
+                pass  # подавляем лог в консоль
+
         try:
-            # Считываем текущий исходный код загруженной в браузер страницы
-            html_source = self.html_frame.get_content()
-            if html_source:
-                soup = BeautifulSoup(html_source, "html.parser")
-                el = soup.find("b", id="ck-balance")
-                if el:
-                    m = re.search(r"\d+", el.text.replace(" ", ""))
-                    if m:
-                        bal = int(m.group())
-                        self.balance_label.config(text=f"💰 {bal:,}".replace(",", " "), fg=ACCENT)
-                else:
-                    self.balance_label.config(text="💰 Нужен вход", fg=YELLOW)
+            server = HTTPServer(("127.0.0.1", 58321), LocalHandler)
+            server.serve_forever()
         except Exception:
             pass
 
-        # Перезагружаем страницу в браузере каждые 15 секунд
-        self._refresh_browser()
-        self.root.after(15000, self._auto_refresh_web_balance)
+    def _update_balance_from_web(self, bal_str):
+        self.last_update_time = time.time()
+        try:
+            bal = int(re.sub(r"\D", "", bal_str))
+            def _do():
+                self.balance_label.config(
+                    text=f"💰 {bal:,}".replace(",", " "), fg=ACCENT,
+                )
+            self.root.after(0, _do)
+        except Exception:
+            pass
+
+    def _connection_checker(self):
+        """Если вкладка закрыта и данные не поступают более 6 секунд — меняем статус"""
+        while True:
+            time.sleep(1)
+            if self.last_update_time > 0 and (time.time() - self.last_update_time > 6):
+                def _do():
+                    self.balance_label.config(text="💰 Вкладка не найдена", fg=YELLOW)
+                try:
+                    self.root.after(0, _do)
+                except tk.TclError:
+                    break
 
     # ------------------------------------------------------
     #  Переключатель Фикс / Рандом
     # ------------------------------------------------------
     def _make_switch(self, parent):
-        wrap = tk.Frame(parent, bg=SURFACE_2, highlightbackground=BORDER, highlightthickness=1)
+        wrap = tk.Frame(parent, bg=SURFACE_2,
+                        highlightbackground=BORDER, highlightthickness=1)
 
-        self.sw_fixed  = tk.Label(wrap, text="Ф", bg=ACCENT, fg="#fff", font=("Segoe UI", 8, "bold"), width=2, cursor="hand2")
-        self.sw_random = tk.Label(wrap, text="Р", bg=SURFACE_2, fg=TEXT_MUTED, font=("Segoe UI", 8, "bold"), width=2, cursor="hand2")
+        self.sw_fixed  = tk.Label(wrap, text="Ф", bg=ACCENT, fg="#fff",
+                                  font=("Segoe UI", 8, "bold"),
+                                  width=2, cursor="hand2")
+        self.sw_random = tk.Label(wrap, text="Р", bg=SURFACE_2, fg=TEXT_MUTED,
+                                  font=("Segoe UI", 8, "bold"),
+                                  width=2, cursor="hand2")
         self.sw_fixed.pack(side="left")
         self.sw_random.pack(side="left")
 
@@ -353,7 +335,8 @@ class HuEvoClicker:
         else:
             self.sw_fixed.config(bg=SURFACE_2, fg=TEXT_MUTED)
             self.sw_random.config(bg=ACCENT, fg="#fff")
-            self.rand_frame.pack(fill="x", pady=(2, 0), before=self.pill)
+            self.rand_frame.pack(fill="x", padx=10, pady=(2, 0),
+                                 before=self.pill)
 
     # ------------------------------------------------------
     def add_point(self):
@@ -389,17 +372,17 @@ class HuEvoClicker:
     def toggle_clicking(self):
         if self.is_running:
             self.is_running = False
-            self.root.after(0, lambda: self.pill.config(text="● Выкл", bg=RED))
+            self.root.after(0, lambda: self.pill.config(text="●  Выкл", bg=RED))
             self.root.after(0, lambda: self.start_btn.config(
-                text="▶ Старт (F6)", bg=ACCENT, activebackground=ACCENT_HOV))
+                text="▶  Старт (F6)", bg=ACCENT, activebackground=ACCENT_HOV))
         else:
             if not self.points:
-                self.root.after(0, lambda: self.pill.config(text="⚠ нет точек", bg=YELLOW))
+                self.root.after(0, lambda: self.pill.config(text="⚠  нет точек", bg=YELLOW))
                 return
             self.is_running = True
-            self.root.after(0, lambda: self.pill.config(text="● Работа", bg=GREEN))
+            self.root.after(0, lambda: self.pill.config(text="●  Работа", bg=GREEN))
             self.root.after(0, lambda: self.start_btn.config(
-                text="■ Стоп (F6)", bg=RED, activebackground="#c03535"))
+                text="■  Стоп (F6)", bg=RED, activebackground="#c03535"))
             self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
 

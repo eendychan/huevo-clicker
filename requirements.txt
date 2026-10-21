@@ -3,3 +3,4 @@ pyinstaller==6.6.0
 requests
 beautifulsoup4
 tkinterweb
+pillow

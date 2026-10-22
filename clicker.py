@@ -151,7 +151,23 @@ def _webview_process_target():
     )
 
     def poll_loop():
-        _time.sleep(4)  # даём странице загрузиться
+        # 1. Ждём полной загрузки страницы
+        print("[webview-sync] Ожидание загрузки страницы...")
+        for attempt in range(60):
+            try:
+                ready = window.evaluate_js('document.readyState')
+                if ready == 'complete':
+                    print("[webview-sync] Страница загружена (readyState=complete)")
+                    break
+            except Exception as e:
+                print(f"[webview-sync] Ожидание... ({e})")
+            _time.sleep(1)
+        else:
+            print("[webview-sync] Таймаут ожидания загрузки страницы")
+            return
+
+        _time.sleep(2)
+
         while True:
             try:
                 js = """
@@ -175,6 +191,8 @@ def _webview_process_target():
                 })();
                 """
                 data = window.evaluate_js(js)
+                print(f"[webview-sync] evaluate_js вернул: {data}")
+
                 if data and isinstance(data, dict) and data.get("balance"):
                     params = urllib.parse.urlencode({
                         "balance": data.get("balance", ""),
@@ -188,10 +206,15 @@ def _webview_process_target():
                         urllib.request.urlopen(
                             f"http://127.0.0.1:58321/update?{params}", timeout=3
                         )
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                        print("[webview-sync] Данные отправлены в кликер")
+                    except Exception as e:
+                        print(f"[webview-sync] Ошибка отправки на локальный сервер: {e}")
+                else:
+                    print("[webview-sync] Баланс не найден на странице (возможно, не авторизован)")
+
+            except Exception as e:
+                print(f"[webview-sync] Ошибка evaluate_js: {e}")
+
             _time.sleep(20)
 
     import threading as _threading

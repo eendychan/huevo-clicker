@@ -21,6 +21,12 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+try:
+    import webview
+    WEBVIEW_AVAILABLE = True
+except ImportError:
+    WEBVIEW_AVAILABLE = False
+
 # ==========================================================
 #  WinAPI
 # ==========================================================
@@ -175,6 +181,11 @@ class HuEvoClicker:
         self.cat_photo_normal = None
         self.avatar_photo = None
 
+        # WebView sync state
+        self.webview_window = None
+        self.webview_thread = None
+        self.webview_running = False
+
         cat_path = resource_path("cat.png")
         if os.path.exists(cat_path) and PIL_AVAILABLE:
             try:
@@ -244,10 +255,7 @@ class HuEvoClicker:
                               activeforeground="#fff", relief="flat", bd=0, font=FONT_TINY, width=3)
         close_btn.pack(side="right", fill="y")
 
-        min_btn = tk.Button(self.title_bar, text="—", command=lambda: root.iconify(),
-                            bg=BG, fg=TEXT_MUTED, activebackground=SURFACE_HOV,
-                            activeforeground=TEXT, relief="flat", bd=0, font=FONT_TINY, width=3)
-        min_btn.pack(side="right", fill="y")
+        # Кнопка "свернуть" удалена по требованию
 
         def start_move(event):
             root.x = event.x
@@ -519,7 +527,7 @@ class HuEvoClicker:
     def open_sync_modal(self):
         modal = tk.Toplevel(self.root)
         modal.overrideredirect(True)
-        modal.geometry("380x470")
+        modal.geometry("380x560")
         modal.configure(bg=BG)
         modal.attributes("-topmost", True)
         modal.resizable(False, False)
@@ -557,8 +565,33 @@ class HuEvoClicker:
         modal_body = tk.Frame(modal, bg=BG)
         modal_body.pack(fill="both", expand=True, padx=16, pady=8)
 
+        # ---- Выбор режима синхронизации ----
+        sync_mode_var = tk.StringVar(value="script")
+
+        mode_frame = tk.Frame(modal_body, bg=BG)
+        mode_frame.pack(fill="x", pady=(0, 8))
+
+        tk.Label(mode_frame, text="Способ синхронизации:", bg=BG, fg=TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
+
+        rb_script = tk.Radiobutton(
+            mode_frame, text="Скрипт Tampermonkey", variable=sync_mode_var, value="script",
+            bg=BG, fg=TEXT_MUTED, selectcolor=SURFACE, activebackground=BG,
+            activeforeground=TEXT, font=FONT_BODY, anchor="w", cursor="hand2"
+        )
+        rb_script.pack(fill="x", pady=1)
+
+        rb_webview = tk.Radiobutton(
+            mode_frame, text="Авторизация в WebView (pywebview)", variable=sync_mode_var, value="webview",
+            bg=BG, fg=TEXT_MUTED, selectcolor=SURFACE, activebackground=BG,
+            activeforeground=TEXT, font=FONT_BODY, anchor="w", cursor="hand2"
+        )
+        rb_webview.pack(fill="x", pady=1)
+
+        # ---- Контейнер для контента скрипта ----
+        script_content = tk.Frame(modal_body, bg=BG)
+
         tk.Label(
-            modal_body, text="Инструкция по синхронизации",
+            script_content, text="Инструкция по синхронизации",
             bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
         ).pack(anchor="w", pady=(0, 4))
 
@@ -569,11 +602,11 @@ class HuEvoClicker:
             "   никнейм и статистика будут передаваться в кликер."
         )
         tk.Label(
-            modal_body, text=info_text, bg=BG, fg=TEXT_MUTED,
+            script_content, text=info_text, bg=BG, fg=TEXT_MUTED,
             font=FONT_TINY, justify="left"
         ).pack(anchor="w", pady=(0, 8))
 
-        code_header = tk.Frame(modal_body, bg=BG)
+        code_header = tk.Frame(script_content, bg=BG)
         code_header.pack(fill="x", pady=(0, 2))
 
         tk.Label(
@@ -641,24 +674,182 @@ class HuEvoClicker:
         )
         copy_icon_btn.pack(side="right")
 
-        text_frame = tk.Frame(modal_body, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        text_frame = tk.Frame(script_content, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         text_frame.pack(fill="both", expand=True, pady=(4, 8))
 
         script_box = tk.Text(
             text_frame, bg=SURFACE, fg=TEXT, insertbackground=TEXT,
-            relief="flat", bd=0, font=("Consolas", 8), wrap="none"
+            relief="flat", bd=0, font=("Consolas", 8), wrap="none", height=14
         )
         script_box.pack(side="left", fill="both", expand=True, padx=6, pady=6)
         script_box.insert("1.0", script_code)
         script_box.config(state="disabled")
 
         copy_btn = tk.Button(
-            modal_body, text="Скопировать скрипт полностью", 
+            script_content, text="Скопировать скрипт полностью", 
             command=lambda: self._copy_to_clipboard(script_code, copy_btn, is_icon=False),
             bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2"
         )
         copy_btn.pack(fill="x", pady=(0, 8), ipady=6)
+
+        # ---- Контейнер для WebView ----
+        webview_content = tk.Frame(modal_body, bg=BG)
+
+        tk.Label(
+            webview_content, text="Авторизация через WebView",
+            bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w", pady=(0, 4))
+
+        wv_info = (
+            "1. Нажмите кнопку ниже — откроется окно с huevo.su/clicker.\n"
+            "2. Войдите в свой аккаунт (один раз, сессия сохранится).\n"
+            "3. Кликер начнёт автоматически опрашивать страницу\n"
+            "   каждые 20 секунд и обновлять баланс."
+        )
+        tk.Label(
+            webview_content, text=wv_info, bg=BG, fg=TEXT_MUTED,
+            font=FONT_TINY, justify="left"
+        ).pack(anchor="w", pady=(0, 12))
+
+        if not WEBVIEW_AVAILABLE:
+            tk.Label(
+                webview_content,
+                text="⚠ Модуль pywebview не установлен.\nУстановите: pip install pywebview",
+                bg=BG, fg=RED_COL, font=FONT_TINY, justify="left"
+            ).pack(anchor="w", pady=(0, 8))
+
+        wv_status_label = tk.Label(
+            webview_content, text="Статус: не запущено",
+            bg=BG, fg=TEXT_MUTED, font=FONT_TINY
+        )
+        wv_status_label.pack(anchor="w", pady=(0, 8))
+
+        def start_webview_sync():
+            if not WEBVIEW_AVAILABLE:
+                wv_status_label.config(text="Статус: pywebview не установлен", fg=RED_COL)
+                return
+            if self.webview_running:
+                wv_status_label.config(text="Статус: уже запущено", fg=YELLOW)
+                return
+            try:
+                self._start_webview_sync()
+                wv_status_label.config(text="Статус: WebView запущен, опрос каждые 20 сек", fg=GREEN_COL)
+            except Exception as e:
+                wv_status_label.config(text=f"Ошибка: {e}", fg=RED_COL)
+
+        wv_btn = tk.Button(
+            webview_content, text="🌐  Открыть WebView для входа",
+            command=start_webview_sync,
+            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
+            relief="flat", bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2",
+            state="normal" if WEBVIEW_AVAILABLE else "disabled"
+        )
+        wv_btn.pack(fill="x", pady=(0, 8), ipady=6)
+
+        stop_wv_btn = tk.Button(
+            webview_content, text="Остановить WebView-синхронизацию",
+            command=lambda: self._stop_webview_sync(wv_status_label),
+            bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER, activeforeground=TEXT,
+            relief="flat", bd=0, font=FONT_TINY, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER
+        )
+        stop_wv_btn.pack(fill="x", pady=(0, 8), ipady=4)
+
+        # ---- Переключение контента ----
+        def update_mode_view(*args):
+            if sync_mode_var.get() == "script":
+                webview_content.pack_forget()
+                script_content.pack(fill="both", expand=True)
+            else:
+                script_content.pack_forget()
+                webview_content.pack(fill="both", expand=True)
+
+        sync_mode_var.trace_add("write", update_mode_view)
+        update_mode_view()
+
+    def _start_webview_sync(self):
+        if not WEBVIEW_AVAILABLE:
+            return
+        if self.webview_running:
+            return
+
+        self.webview_running = True
+
+        def run_webview():
+            try:
+                window = webview.create_window(
+                    "huEVO — авторизация",
+                    "https://huevo.su/clicker",
+                    width=900, height=650,
+                    text_select=True,
+                )
+                self.webview_window = window
+
+                def poll_loop(w):
+                    time.sleep(3)  # даём странице загрузиться
+                    while self.webview_running:
+                        try:
+                            js = """
+                            (function() {
+                                const bal = document.getElementById('ck-balance');
+                                const day = document.getElementById('ck-day');
+                                const clicks = document.getElementById('ck-clicks');
+                                const total = document.getElementById('ck-total');
+                                const user = document.querySelector('.mh-user-name');
+                                const av = document.querySelector('.mh-user-av');
+                                let avUrl = av ? av.src : '';
+                                if (avUrl && avUrl.startsWith('/')) avUrl = location.origin + avUrl;
+                                return {
+                                    balance: bal ? bal.innerText : '',
+                                    day: day ? day.innerText : '0',
+                                    clicks: clicks ? clicks.innerText : '0',
+                                    total: total ? total.innerText : '0',
+                                    user: user ? user.innerText : '',
+                                    av: avUrl
+                                };
+                            })();
+                            """
+                            data = w.evaluate_js(js)
+                            if data and isinstance(data, dict) and data.get("balance"):
+                                self.root.after(0, lambda d=data: self._update_balance_from_web(
+                                    d.get("balance", ""),
+                                    d.get("user", ""),
+                                    d.get("av", "")
+                                ))
+                                self.stat_day = data.get("day", "0")
+                                self.stat_clicks = data.get("clicks", "0")
+                                self.stat_total = data.get("total", "0")
+                            time.sleep(20)
+                        except Exception:
+                            time.sleep(5)
+
+                t = threading.Thread(target=poll_loop, args=(window,), daemon=True)
+                t.start()
+
+                webview.start(private_mode=False, debug=False)
+            except Exception:
+                pass
+            finally:
+                self.webview_running = False
+                self.webview_window = None
+
+        self.webview_thread = threading.Thread(target=run_webview, daemon=True)
+        self.webview_thread.start()
+
+    def _stop_webview_sync(self, status_label=None):
+        self.webview_running = False
+        if self.webview_window is not None:
+            try:
+                self.webview_window.destroy()
+            except Exception:
+                pass
+            self.webview_window = None
+        if status_label:
+            try:
+                status_label.config(text="Статус: остановлено", fg=TEXT_MUTED)
+            except Exception:
+                pass
 
     def _copy_to_clipboard(self, text, btn, is_icon=False):
         self.root.clipboard_clear()
@@ -795,7 +986,7 @@ class HuEvoClicker:
     def _connection_checker(self):
         while True:
             time.sleep(1)
-            if self.last_update_time > 0 and (time.time() - self.last_update_time > 6):
+            if self.last_update_time > 0 and (time.time() - self.last_update_time > 25):
                 self.tab_active = False
                 self.last_balance = None
                 self.last_avatar_url = ""

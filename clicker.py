@@ -9,10 +9,8 @@ import re
 import sys
 import webbrowser
 import urllib.request
-import urllib.parse
 import io
 import ctypes
-import multiprocessing
 from ctypes import wintypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
@@ -22,12 +20,6 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
-
-try:
-    import webview
-    WEBVIEW_AVAILABLE = True
-except ImportError:
-    WEBVIEW_AVAILABLE = False
 
 # ==========================================================
 #  WinAPI
@@ -132,99 +124,6 @@ def resource_path(relative_path):
 
 
 # ==========================================================
-#  Функция для отдельного процесса pywebview
-# ==========================================================
-def _webview_process_target():
-    """Запускается в отдельном процессе. Открывает окно pywebview
-    и каждые 20 секунд читает баланс со страницы, отправляя его
-    на локальный HTTP-сервер кликера."""
-    import webview
-    import time as _time
-    import urllib.request
-    import urllib.parse
-
-    window = webview.create_window(
-        "huEVO — авторизация",
-        "https://huevo.su/clicker",
-        width=900, height=650,
-        text_select=True,
-    )
-
-    def poll_loop():
-        # 1. Ждём полной загрузки страницы
-        print("[webview-sync] Ожидание загрузки страницы...")
-        for attempt in range(60):
-            try:
-                ready = window.evaluate_js('document.readyState')
-                if ready == 'complete':
-                    print("[webview-sync] Страница загружена (readyState=complete)")
-                    break
-            except Exception as e:
-                print(f"[webview-sync] Ожидание... ({e})")
-            _time.sleep(1)
-        else:
-            print("[webview-sync] Таймаут ожидания загрузки страницы")
-            return
-
-        _time.sleep(2)
-
-        while True:
-            try:
-                js = """
-                (function() {
-                    const bal = document.getElementById('ck-balance');
-                    const day = document.getElementById('ck-day');
-                    const clicks = document.getElementById('ck-clicks');
-                    const total = document.getElementById('ck-total');
-                    const user = document.querySelector('.mh-user-name');
-                    const av = document.querySelector('.mh-user-av');
-                    let avUrl = av ? av.src : '';
-                    if (avUrl && avUrl.startsWith('/')) avUrl = location.origin + avUrl;
-                    return {
-                        balance: bal ? bal.innerText : '',
-                        day: day ? day.innerText : '0',
-                        clicks: clicks ? clicks.innerText : '0',
-                        total: total ? total.innerText : '0',
-                        user: user ? user.innerText : '',
-                        av: avUrl
-                    };
-                })();
-                """
-                data = window.evaluate_js(js)
-                print(f"[webview-sync] evaluate_js вернул: {data}")
-
-                if data and isinstance(data, dict) and data.get("balance"):
-                    params = urllib.parse.urlencode({
-                        "balance": data.get("balance", ""),
-                        "day": data.get("day", "0"),
-                        "clicks": data.get("clicks", "0"),
-                        "total": data.get("total", "0"),
-                        "user": data.get("user", ""),
-                        "av": data.get("av", ""),
-                    })
-                    try:
-                        urllib.request.urlopen(
-                            f"http://127.0.0.1:58321/update?{params}", timeout=3
-                        )
-                        print("[webview-sync] Данные отправлены в кликер")
-                    except Exception as e:
-                        print(f"[webview-sync] Ошибка отправки на локальный сервер: {e}")
-                else:
-                    print("[webview-sync] Баланс не найден на странице (возможно, не авторизован)")
-
-            except Exception as e:
-                print(f"[webview-sync] Ошибка evaluate_js: {e}")
-
-            _time.sleep(20)
-
-    import threading as _threading
-    t = _threading.Thread(target=poll_loop, daemon=True)
-    t.start()
-
-    webview.start(private_mode=False, debug=False)
-
-
-# ==========================================================
 #  Приложение
 # ==========================================================
 class HuEvoClicker:
@@ -272,9 +171,6 @@ class HuEvoClicker:
         self.cat_photo_dim = None
         self.cat_photo_normal = None
         self.avatar_photo = None
-
-        self.webview_process = None
-        self.webview_running = False
 
         cat_path = resource_path("cat.png")
         if os.path.exists(cat_path) and PIL_AVAILABLE:
@@ -607,7 +503,7 @@ class HuEvoClicker:
     def open_sync_modal(self):
         modal = tk.Toplevel(self.root)
         modal.overrideredirect(True)
-        modal.geometry("380x560")
+        modal.geometry("380x470")
         modal.configure(bg=BG)
         modal.attributes("-topmost", True)
         modal.resizable(False, False)
@@ -644,29 +540,8 @@ class HuEvoClicker:
         modal_body = tk.Frame(modal, bg=BG)
         modal_body.pack(fill="both", expand=True, padx=16, pady=8)
 
-        sync_mode_var = tk.StringVar(value="script")
-
-        mode_frame = tk.Frame(modal_body, bg=BG)
-        mode_frame.pack(fill="x", pady=(0, 8))
-
-        tk.Label(mode_frame, text="Способ синхронизации:", bg=BG, fg=TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
-
-        tk.Radiobutton(
-            mode_frame, text="Скрипт Tampermonkey", variable=sync_mode_var, value="script",
-            bg=BG, fg=TEXT_MUTED, selectcolor=SURFACE, activebackground=BG,
-            activeforeground=TEXT, font=FONT_BODY, anchor="w", cursor="hand2"
-        ).pack(fill="x", pady=1)
-
-        tk.Radiobutton(
-            mode_frame, text="Авторизация в WebView (pywebview)", variable=sync_mode_var, value="webview",
-            bg=BG, fg=TEXT_MUTED, selectcolor=SURFACE, activebackground=BG,
-            activeforeground=TEXT, font=FONT_BODY, anchor="w", cursor="hand2"
-        ).pack(fill="x", pady=1)
-
-        script_content = tk.Frame(modal_body, bg=BG)
-
         tk.Label(
-            script_content, text="Инструкция по синхронизации",
+            modal_body, text="Инструкция по синхронизации",
             bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
         ).pack(anchor="w", pady=(0, 4))
 
@@ -674,14 +549,16 @@ class HuEvoClicker:
             "1. Установите расширение Браузера Tampermonkey.\n"
             "2. Создайте новый скрипт и вставьте код ниже.\n"
             "3. Откройте вкладку huevo.su/clicker — баланс, аватар,\n"
-            "   никнейм и статистика будут передаваться в кликер."
+            "   никнейм и статистика будут передаваться в кликер.\n"
+            "4. Данные шлёт ТОЛЬКО активная вкладка — баланс не будет\n"
+            "   прыгать при открытии нескольких вкладок."
         )
         tk.Label(
-            script_content, text=info_text, bg=BG, fg=TEXT_MUTED,
+            modal_body, text=info_text, bg=BG, fg=TEXT_MUTED,
             font=FONT_TINY, justify="left"
         ).pack(anchor="w", pady=(0, 8))
 
-        code_header = tk.Frame(script_content, bg=BG)
+        code_header = tk.Frame(modal_body, bg=BG)
         code_header.pack(fill="x", pady=(0, 2))
 
         tk.Label(
@@ -693,22 +570,23 @@ class HuEvoClicker:
             "// ==UserScript==\n"
             "// @name         HuEvo Clicker Full Sync\n"
             "// @namespace    http://tampermonkey.net/\n"
-            "// @version      1.4\n"
+            "// @version      1.5\n"
             "// @match        https://huevo.su/clicker*\n"
             "// @grant        none\n"
             "// ==/UserScript==\n\n"
             "(function() {\n"
             "    'use strict';\n"
-            "    let lastToast = '';\n"
+            "    let lastToast = '';\n\n"
             "    setInterval(() => {\n"
+            "        // Шлём данные ТОЛЬКО если вкладка в фокусе\n"
+            "        if (!document.hasFocus()) return;\n\n"
             "        const el = document.getElementById('ck-balance');\n"
             "        const toastEl = document.getElementById('hue-toast');\n"
             "        const dayEl = document.getElementById('ck-day');\n"
             "        const clicksEl = document.getElementById('ck-clicks');\n"
             "        const totalEl = document.getElementById('ck-total');\n"
             "        const userEl = document.querySelector('.mh-user-name');\n"
-            "        const avEl = document.querySelector('.mh-user-av');\n"
-            "        \n"
+            "        const avEl = document.querySelector('.mh-user-av');\n\n"
             "        const balanceText = el ? el.innerText : '';\n"
             "        const dayText = dayEl ? dayEl.innerText : '0';\n"
             "        const clicksText = clicksEl ? clicksEl.innerText : '0';\n"
@@ -717,8 +595,7 @@ class HuEvoClicker:
             "        let avUrl = avEl ? avEl.src : '';\n"
             "        if (avUrl && avUrl.startsWith('/')) {\n"
             "            avUrl = window.location.origin + avUrl;\n"
-            "        }\n"
-            "        \n"
+            "        }\n\n"
             "        let toastText = '';\n"
             "        if (toastEl && toastEl.style.display !== 'none' && toastEl.innerText) {\n"
             "            const currentToast = toastEl.innerText;\n"
@@ -728,13 +605,12 @@ class HuEvoClicker:
             "            }\n"
             "        } else {\n"
             "            lastToast = '';\n"
-            "        }\n"
-            "\n"
+            "        }\n\n"
+            "        if (!balanceText) return;\n\n"
             "        let url = 'http://127.0.0.1:58321/update?balance=' + encodeURIComponent(balanceText) + '&day=' + encodeURIComponent(dayText) + '&clicks=' + encodeURIComponent(clicksText) + '&total=' + encodeURIComponent(totalText) + '&user=' + encodeURIComponent(userText) + '&av=' + encodeURIComponent(avUrl);\n"
             "        if (toastText) {\n"
             "            url += '&toast=' + encodeURIComponent(toastText);\n"
-            "        }\n"
-            "\n"
+            "        }\n\n"
             "        fetch(url).catch(() => {});\n"
             "    }, 1000);\n"
             "})();"
@@ -749,134 +625,24 @@ class HuEvoClicker:
         )
         copy_icon_btn.pack(side="right")
 
-        text_frame = tk.Frame(script_content, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        text_frame = tk.Frame(modal_body, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         text_frame.pack(fill="both", expand=True, pady=(4, 8))
 
         script_box = tk.Text(
             text_frame, bg=SURFACE, fg=TEXT, insertbackground=TEXT,
-            relief="flat", bd=0, font=("Consolas", 8), wrap="none", height=14
+            relief="flat", bd=0, font=("Consolas", 8), wrap="none"
         )
         script_box.pack(side="left", fill="both", expand=True, padx=6, pady=6)
         script_box.insert("1.0", script_code)
         script_box.config(state="disabled")
 
         copy_btn = tk.Button(
-            script_content, text="Скопировать скрипт полностью",
+            modal_body, text="Скопировать скрипт полностью",
             command=lambda: self._copy_to_clipboard(script_code, copy_btn, is_icon=False),
             bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2"
         )
         copy_btn.pack(fill="x", pady=(0, 8), ipady=6)
-
-        webview_content = tk.Frame(modal_body, bg=BG)
-
-        tk.Label(
-            webview_content, text="Авторизация через WebView",
-            bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
-        ).pack(anchor="w", pady=(0, 4))
-
-        wv_info = (
-            "1. Нажмите кнопку ниже — откроется окно с huevo.su/clicker.\n"
-            "2. Войдите в свой аккаунт (один раз, сессия сохранится).\n"
-            "3. Кликер начнёт автоматически опрашивать страницу\n"
-            "   каждые 20 секунд и обновлять баланс.\n\n"
-            "Требуется WebView2 Runtime (в Windows 10/11 уже есть)."
-        )
-        tk.Label(
-            webview_content, text=wv_info, bg=BG, fg=TEXT_MUTED,
-            font=FONT_TINY, justify="left"
-        ).pack(anchor="w", pady=(0, 12))
-
-        if not WEBVIEW_AVAILABLE:
-            tk.Label(
-                webview_content,
-                text="⚠ Модуль pywebview не установлен.\nУстановите: pip install pywebview",
-                bg=BG, fg=RED_COL, font=FONT_TINY, justify="left"
-            ).pack(anchor="w", pady=(0, 8))
-
-        wv_status_label = tk.Label(
-            webview_content, text="Статус: не запущено",
-            bg=BG, fg=TEXT_MUTED, font=FONT_TINY
-        )
-        wv_status_label.pack(anchor="w", pady=(0, 8))
-
-        def start_webview_sync():
-            if not WEBVIEW_AVAILABLE:
-                wv_status_label.config(text="Статус: pywebview не установлен", fg=RED_COL)
-                return
-            if self.webview_running:
-                wv_status_label.config(text="Статус: уже запущено", fg=YELLOW)
-                return
-            try:
-                self._start_webview_sync()
-                wv_status_label.config(text="Статус: WebView запущен, опрос каждые 20 сек", fg=GREEN_COL)
-            except Exception as e:
-                wv_status_label.config(text=f"Ошибка: {e}", fg=RED_COL)
-
-        wv_btn = tk.Button(
-            webview_content, text="🌐  Открыть WebView для входа",
-            command=start_webview_sync,
-            bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
-            relief="flat", bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2",
-            state="normal" if WEBVIEW_AVAILABLE else "disabled"
-        )
-        wv_btn.pack(fill="x", pady=(0, 8), ipady=6)
-
-        stop_wv_btn = tk.Button(
-            webview_content, text="Остановить WebView-синхронизацию",
-            command=lambda: self._stop_webview_sync(wv_status_label),
-            bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER, activeforeground=TEXT,
-            relief="flat", bd=0, font=FONT_TINY, cursor="hand2",
-            highlightthickness=1, highlightbackground=BORDER
-        )
-        stop_wv_btn.pack(fill="x", pady=(0, 8), ipady=4)
-
-        def update_mode_view(*args):
-            if sync_mode_var.get() == "script":
-                webview_content.pack_forget()
-                script_content.pack(fill="both", expand=True)
-            else:
-                script_content.pack_forget()
-                webview_content.pack(fill="both", expand=True)
-
-        sync_mode_var.trace_add("write", update_mode_view)
-        update_mode_view()
-
-    # ------------------------------------------------------
-    #  WebView-синхронизация через ОТДЕЛЬНЫЙ ПРОЦЕСС
-    # ------------------------------------------------------
-    def _start_webview_sync(self):
-        if not WEBVIEW_AVAILABLE:
-            return
-        if self.webview_running:
-            return
-
-        self.webview_running = True
-
-        p = multiprocessing.Process(target=_webview_process_target, daemon=True)
-        p.start()
-        self.webview_process = p
-
-        def monitor():
-            p.join()
-            self.webview_running = False
-            self.webview_process = None
-
-        threading.Thread(target=monitor, daemon=True).start()
-
-    def _stop_webview_sync(self, status_label=None):
-        self.webview_running = False
-        if self.webview_process is not None:
-            try:
-                self.webview_process.terminate()
-            except Exception:
-                pass
-            self.webview_process = None
-        if status_label:
-            try:
-                status_label.config(text="Статус: остановлено", fg=TEXT_MUTED)
-            except Exception:
-                pass
 
     def _copy_to_clipboard(self, text, btn, is_icon=False):
         self.root.clipboard_clear()
@@ -1013,7 +779,7 @@ class HuEvoClicker:
     def _connection_checker(self):
         while True:
             time.sleep(1)
-            if self.last_update_time > 0 and (time.time() - self.last_update_time > 25):
+            if self.last_update_time > 0 and (time.time() - self.last_update_time > 6):
                 self.tab_active = False
                 self.last_balance = None
                 self.last_avatar_url = ""
@@ -1120,7 +886,6 @@ class HuEvoClicker:
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
     root = tk.Tk()
     app = HuEvoClicker(root)
     root.mainloop()

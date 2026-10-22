@@ -420,16 +420,38 @@ class HuEvoClicker:
         tk.Label(main_frame, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 1))
 
+        # ---- Нижняя панель: Проебать + бирка (market) + @ (usernames) ----
         self.proebat_wrapper = tk.Frame(main_frame, bg=RED_COL, bd=0)
         self.proebat_wrapper.pack(fill="x", pady=(1, 0))
 
+        proebat_inner = tk.Frame(self.proebat_wrapper, bg=RED_COL)
+        proebat_inner.pack(fill="x", padx=1, pady=1)
+
         self.proebat_btn = tk.Button(
-            self.proebat_wrapper, text="Проебать", command=lambda: webbrowser.open("https://huevo.su/apps/1"),
+            proebat_inner, text="Проебать", command=lambda: webbrowser.open("https://huevo.su/apps/1"),
             bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
             activeforeground=TEXT, relief="flat", bd=0,
             font=FONT_TINY, cursor="hand2", highlightthickness=0,
         )
-        self.proebat_btn.pack(fill="x", padx=1, pady=1)
+        self.proebat_btn.pack(side="left", fill="x", expand=True, padx=(0, 2), ipady=1)
+
+        self.market_btn = tk.Button(
+            proebat_inner, text="🏷", command=lambda: webbrowser.open("https://huevo.su/market"),
+            bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
+            activeforeground=TEXT, relief="flat", bd=0,
+            font=("Segoe UI Emoji", 9), cursor="hand2", highlightthickness=0,
+            width=2,
+        )
+        self.market_btn.pack(side="left", padx=(0, 2), ipady=1)
+
+        self.usernames_btn = tk.Button(
+            proebat_inner, text="@", command=lambda: webbrowser.open("https://huevo.su/settings/usernames"),
+            bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
+            activeforeground=TEXT, relief="flat", bd=0,
+            font=("Consolas", 9, "bold"), cursor="hand2", highlightthickness=0,
+            width=2,
+        )
+        self.usernames_btn.pack(side="left", ipady=1)
 
         self.toast_label = tk.Label(
             main_frame, text="", bg=BG, fg=BG,
@@ -551,7 +573,8 @@ class HuEvoClicker:
             "3. Откройте вкладку huevo.su/clicker — баланс, аватар,\n"
             "   никнейм и статистика будут передаваться в кликер.\n"
             "4. Данные шлёт ТОЛЬКО активная вкладка — баланс не будет\n"
-            "   прыгать при открытии нескольких вкладок."
+            "   прыгать при открытии нескольких вкладок.\n"
+            "5. Уведомления о монетках приходят мгновенно (MutationObserver)."
         )
         tk.Label(
             modal_body, text=info_text, bg=BG, fg=TEXT_MUTED,
@@ -570,24 +593,49 @@ class HuEvoClicker:
             "// ==UserScript==\n"
             "// @name         HuEvo Clicker Full Sync\n"
             "// @namespace    http://tampermonkey.net/\n"
-            "// @version      1.5\n"
+            "// @version      1.6\n"
             "// @match        https://huevo.su/clicker*\n"
             "// @grant        none\n"
             "// ==/UserScript==\n\n"
             "(function() {\n"
-            "    'use strict';\n"
-            "    let lastToast = '';\n\n"
+            "    'use strict';\n\n"
+            "    // ---------- 1. Мгновенная отправка тостов через MutationObserver ----------\n"
+            "    function sendToast(toastText) {\n"
+            "        if (!toastText) return;\n"
+            "        const url = 'http://127.0.0.1:58321/update?toast=' + encodeURIComponent(toastText);\n"
+            "        fetch(url).catch(() => {});\n"
+            "    }\n\n"
+            "    function attachToastObserver() {\n"
+            "        const toastEl = document.getElementById('hue-toast');\n"
+            "        if (!toastEl) {\n"
+            "            setTimeout(attachToastObserver, 1000);\n"
+            "            return;\n"
+            "        }\n"
+            "        let lastText = '';\n"
+            "        const obs = new MutationObserver(() => {\n"
+            "            const visible = toastEl.style.display !== 'none' && toastEl.innerText.trim();\n"
+            "            if (visible && toastEl.innerText !== lastText) {\n"
+            "                lastText = toastEl.innerText;\n"
+            "                sendToast(toastEl.innerText);\n"
+            "            }\n"
+            "            if (!visible) {\n"
+            "                lastText = '';\n"
+            "            }\n"
+            "        });\n"
+            "        obs.observe(toastEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['style'] });\n"
+            "    }\n"
+            "    attachToastObserver();\n\n"
+            "    // ---------- 2. Периодическая отправка баланса (только активная вкладка) ----------\n"
             "    setInterval(() => {\n"
-            "        // Шлём данные ТОЛЬКО если вкладка в фокусе\n"
             "        if (!document.hasFocus()) return;\n\n"
             "        const el = document.getElementById('ck-balance');\n"
-            "        const toastEl = document.getElementById('hue-toast');\n"
             "        const dayEl = document.getElementById('ck-day');\n"
             "        const clicksEl = document.getElementById('ck-clicks');\n"
             "        const totalEl = document.getElementById('ck-total');\n"
             "        const userEl = document.querySelector('.mh-user-name');\n"
             "        const avEl = document.querySelector('.mh-user-av');\n\n"
             "        const balanceText = el ? el.innerText : '';\n"
+            "        if (!balanceText) return;\n\n"
             "        const dayText = dayEl ? dayEl.innerText : '0';\n"
             "        const clicksText = clicksEl ? clicksEl.innerText : '0';\n"
             "        const totalText = totalEl ? totalEl.innerText : '0';\n"
@@ -596,21 +644,12 @@ class HuEvoClicker:
             "        if (avUrl && avUrl.startsWith('/')) {\n"
             "            avUrl = window.location.origin + avUrl;\n"
             "        }\n\n"
-            "        let toastText = '';\n"
-            "        if (toastEl && toastEl.style.display !== 'none' && toastEl.innerText) {\n"
-            "            const currentToast = toastEl.innerText;\n"
-            "            if (currentToast !== lastToast) {\n"
-            "                toastText = currentToast;\n"
-            "                lastToast = currentToast;\n"
-            "            }\n"
-            "        } else {\n"
-            "            lastToast = '';\n"
-            "        }\n\n"
-            "        if (!balanceText) return;\n\n"
-            "        let url = 'http://127.0.0.1:58321/update?balance=' + encodeURIComponent(balanceText) + '&day=' + encodeURIComponent(dayText) + '&clicks=' + encodeURIComponent(clicksText) + '&total=' + encodeURIComponent(totalText) + '&user=' + encodeURIComponent(userText) + '&av=' + encodeURIComponent(avUrl);\n"
-            "        if (toastText) {\n"
-            "            url += '&toast=' + encodeURIComponent(toastText);\n"
-            "        }\n\n"
+            "        const url = 'http://127.0.0.1:58321/update?balance=' + encodeURIComponent(balanceText)\n"
+            "            + '&day=' + encodeURIComponent(dayText)\n"
+            "            + '&clicks=' + encodeURIComponent(clicksText)\n"
+            "            + '&total=' + encodeURIComponent(totalText)\n"
+            "            + '&user=' + encodeURIComponent(userText)\n"
+            "            + '&av=' + encodeURIComponent(avUrl);\n\n"
             "        fetch(url).catch(() => {});\n"
             "    }, 1000);\n"
             "})();"

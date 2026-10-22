@@ -421,37 +421,51 @@ class HuEvoClicker:
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 1))
 
         # ---- Нижняя панель: Проебать + бирка (market) + @ (usernames) ----
-        self.proebat_wrapper = tk.Frame(main_frame, bg=RED_COL, bd=0)
-        self.proebat_wrapper.pack(fill="x", pady=(1, 0))
+        bottom_row = tk.Frame(main_frame, bg=BG)
+        bottom_row.pack(fill="x", pady=(1, 0))
 
-        proebat_inner = tk.Frame(self.proebat_wrapper, bg=RED_COL)
-        proebat_inner.pack(fill="x", padx=1, pady=1)
+        # «Проебать» — растягивается, своя радужная обводка
+        self.proebat_outer = tk.Frame(bottom_row, bg="#ef4444", bd=0)
+        self.proebat_outer.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
         self.proebat_btn = tk.Button(
-            proebat_inner, text="Проебать", command=lambda: webbrowser.open("https://huevo.su/apps/1"),
+            self.proebat_outer, text="Проебать",
+            command=lambda: webbrowser.open("https://huevo.su/apps/1"),
             bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
             activeforeground=TEXT, relief="flat", bd=0,
             font=FONT_TINY, cursor="hand2", highlightthickness=0,
         )
-        self.proebat_btn.pack(side="left", fill="x", expand=True, padx=(0, 2), ipady=1)
+        self.proebat_btn.pack(fill="both", expand=True, padx=1, pady=1, ipady=1)
+
+        # Квадратная кнопка-бирка → market (24×24)
+        self.market_outer = tk.Frame(bottom_row, bg="#f97316", bd=0, width=24, height=24)
+        self.market_outer.pack(side="left", padx=(0, 4))
+        self.market_outer.pack_propagate(False)
 
         self.market_btn = tk.Button(
-            proebat_inner, text="🏷", command=lambda: webbrowser.open("https://huevo.su/market"),
+            self.market_outer, text="🏷",
+            command=lambda: webbrowser.open("https://huevo.su/market"),
             bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
             activeforeground=TEXT, relief="flat", bd=0,
-            font=("Segoe UI Emoji", 9), cursor="hand2", highlightthickness=0,
-            width=2,
+            font=("Segoe UI Emoji", 8), cursor="hand2", highlightthickness=0,
+            padx=0, pady=0,
         )
-        self.market_btn.pack(side="left", padx=(0, 2), ipady=1)
+        self.market_btn.pack(fill="both", expand=True, padx=1, pady=1)
+
+        # Квадратная кнопка @ → settings/usernames (24×24)
+        self.usernames_outer = tk.Frame(bottom_row, bg="#eab308", bd=0, width=24, height=24)
+        self.usernames_outer.pack(side="left")
+        self.usernames_outer.pack_propagate(False)
 
         self.usernames_btn = tk.Button(
-            proebat_inner, text="@", command=lambda: webbrowser.open("https://huevo.su/settings/usernames"),
+            self.usernames_outer, text="@",
+            command=lambda: webbrowser.open("https://huevo.su/settings/usernames"),
             bg=SURFACE, fg=TEXT_MUTED, activebackground=BORDER,
             activeforeground=TEXT, relief="flat", bd=0,
             font=("Consolas", 9, "bold"), cursor="hand2", highlightthickness=0,
-            width=2,
+            padx=0, pady=0,
         )
-        self.usernames_btn.pack(side="left", ipady=1)
+        self.usernames_btn.pack(fill="both", expand=True, padx=1, pady=1)
 
         self.toast_label = tk.Label(
             main_frame, text="", bg=BG, fg=BG,
@@ -462,12 +476,22 @@ class HuEvoClicker:
     # ------------------------------------------------------
     def _start_rainbow_animation(self):
         self.rainbow_colors = ["#ef4444", "#f97316", "#eab308", "#10b981", "#06b6d4", "#6366f1", "#a855f7"]
-        self.rainbow_idx = 0
+        n = len(self.rainbow_colors)
+        # у каждой кнопки своя фаза, чтобы переливались не синхронно
+        self.rainbow_idx_proebat = 0
+        self.rainbow_idx_market = 2
+        self.rainbow_idx_usernames = 4
+
         def update_border():
             try:
-                col = self.rainbow_colors[self.rainbow_idx]
-                self.rainbow_idx = (self.rainbow_idx + 1) % len(self.rainbow_colors)
-                self.proebat_wrapper.config(bg=col)
+                self.rainbow_idx_proebat = (self.rainbow_idx_proebat + 1) % n
+                self.rainbow_idx_market = (self.rainbow_idx_market + 1) % n
+                self.rainbow_idx_usernames = (self.rainbow_idx_usernames + 1) % n
+
+                self.proebat_outer.config(bg=self.rainbow_colors[self.rainbow_idx_proebat])
+                self.market_outer.config(bg=self.rainbow_colors[self.rainbow_idx_market])
+                self.usernames_outer.config(bg=self.rainbow_colors[self.rainbow_idx_usernames])
+
                 self.root.after(200, update_border)
             except Exception:
                 pass

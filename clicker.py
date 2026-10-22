@@ -9,8 +9,10 @@ import re
 import sys
 import webbrowser
 import urllib.request
+import urllib.parse
 import io
 import ctypes
+import multiprocessing
 from ctypes import wintypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
@@ -130,6 +132,76 @@ def resource_path(relative_path):
 
 
 # ==========================================================
+#  Функция для отдельного процесса pywebview
+# ==========================================================
+def _webview_process_target():
+    """Запускается в отдельном процессе. Открывает окно pywebview
+    и каждые 20 секунд читает баланс со страницы, отправляя его
+    на локальный HTTP-сервер кликера."""
+    import webview
+    import time as _time
+    import urllib.request
+    import urllib.parse
+
+    window = webview.create_window(
+        "huEVO — авторизация",
+        "https://huevo.su/clicker",
+        width=900, height=650,
+        text_select=True,
+    )
+
+    def poll_loop():
+        _time.sleep(4)  # даём странице загрузиться
+        while True:
+            try:
+                js = """
+                (function() {
+                    const bal = document.getElementById('ck-balance');
+                    const day = document.getElementById('ck-day');
+                    const clicks = document.getElementById('ck-clicks');
+                    const total = document.getElementById('ck-total');
+                    const user = document.querySelector('.mh-user-name');
+                    const av = document.querySelector('.mh-user-av');
+                    let avUrl = av ? av.src : '';
+                    if (avUrl && avUrl.startsWith('/')) avUrl = location.origin + avUrl;
+                    return {
+                        balance: bal ? bal.innerText : '',
+                        day: day ? day.innerText : '0',
+                        clicks: clicks ? clicks.innerText : '0',
+                        total: total ? total.innerText : '0',
+                        user: user ? user.innerText : '',
+                        av: avUrl
+                    };
+                })();
+                """
+                data = window.evaluate_js(js)
+                if data and isinstance(data, dict) and data.get("balance"):
+                    params = urllib.parse.urlencode({
+                        "balance": data.get("balance", ""),
+                        "day": data.get("day", "0"),
+                        "clicks": data.get("clicks", "0"),
+                        "total": data.get("total", "0"),
+                        "user": data.get("user", ""),
+                        "av": data.get("av", ""),
+                    })
+                    try:
+                        urllib.request.urlopen(
+                            f"http://127.0.0.1:58321/update?{params}", timeout=3
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            _time.sleep(20)
+
+    import threading as _threading
+    t = _threading.Thread(target=poll_loop, daemon=True)
+    t.start()
+
+    webview.start(private_mode=False, debug=False)
+
+
+# ==========================================================
 #  Приложение
 # ==========================================================
 class HuEvoClicker:
@@ -141,7 +213,6 @@ class HuEvoClicker:
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        # Установка иконки приложения (.ico)
         ico_path = resource_path("icon.ico")
         if os.path.exists(ico_path):
             try:
@@ -149,15 +220,14 @@ class HuEvoClicker:
             except Exception:
                 pass
 
-        # Исправление отображения в панели задач для overrideredirect окна
         def fix_taskbar():
             try:
                 hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
                 if not hwnd:
                     hwnd = root.winfo_id()
                 ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-                ex_style = ex_style & ~0x00000080  # WS_EX_TOOLWINDOW
-                ex_style = ex_style | 0x00040000   # WS_EX_APPWINDOW
+                ex_style = ex_style & ~0x00000080
+                ex_style = ex_style | 0x00040000
                 ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex_style)
                 root.withdraw()
                 root.deiconify()
@@ -169,21 +239,18 @@ class HuEvoClicker:
         self.tab_active = False
         self.last_balance = None
         self.current_bal_text = "0"
-        
+
         self.stat_day = "0"
         self.stat_clicks = "0"
         self.stat_total = "0"
         self.last_avatar_url = ""
 
-        # Кэш картинок
         self.cat_frames = []
         self.cat_photo_dim = None
         self.cat_photo_normal = None
         self.avatar_photo = None
 
-        # WebView sync state
-        self.webview_window = None
-        self.webview_thread = None
+        self.webview_process = None
         self.webview_running = False
 
         cat_path = resource_path("cat.png")
@@ -194,7 +261,7 @@ class HuEvoClicker:
                 new_h = 16
                 new_w = max(1, int(w * (new_h / h)))
                 pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                
+
                 self.cat_photo_normal = ImageTk.PhotoImage(pil_img)
 
                 def make_frame(img_transformed):
@@ -242,7 +309,6 @@ class HuEvoClicker:
     def _build_ui(self):
         root = self.root
 
-        # ---- Кастомная минималистичная шапка окна ----
         self.title_bar = tk.Frame(root, bg=BG, height=28)
         self.title_bar.pack(fill="x", side="top")
         self.title_bar.pack_propagate(False)
@@ -254,8 +320,6 @@ class HuEvoClicker:
                               bg=BG, fg=TEXT_MUTED, activebackground=RED_COL,
                               activeforeground="#fff", relief="flat", bd=0, font=FONT_TINY, width=3)
         close_btn.pack(side="right", fill="y")
-
-        # Кнопка "свернуть" удалена по требованию
 
         def start_move(event):
             root.x = event.x
@@ -270,9 +334,8 @@ class HuEvoClicker:
         main_frame = tk.Frame(root, bg=BG)
         main_frame.pack(fill="both", expand=True, padx=12, pady=(2, 2))
 
-        # ---- Интерактивная плашка баланса ----
         self.balance_card = tk.Frame(
-            main_frame, bg=SURFACE, 
+            main_frame, bg=SURFACE,
             highlightbackground=BORDER, highlightthickness=1,
             cursor="hand2", height=32
         )
@@ -307,7 +370,6 @@ class HuEvoClicker:
             widget.bind("<Leave>", self._on_card_leave)
             widget.bind("<Button-1>", lambda e: self.open_sync_modal())
 
-        # ---- Расширяющаяся часть кнопки баланса (overlay продолжение) ----
         self.expanded_card = tk.Frame(
             main_frame, bg=SURFACE,
             highlightbackground=BORDER, highlightthickness=1,
@@ -334,7 +396,6 @@ class HuEvoClicker:
         self.exp_clicks_val = make_stat_row(exp_inner, "Кликов")
         self.exp_total_val = make_stat_row(exp_inner, "Нарулил")
 
-        # ---- Точки ----
         tk.Button(
             main_frame, text="+  Добавить точку (F2)", command=self.add_point,
             bg=SURFACE, fg=TEXT, activebackground=BORDER,
@@ -362,7 +423,6 @@ class HuEvoClicker:
             highlightbackground=BORDER,
         ).pack(fill="x", pady=(2, 0), ipady=1)
 
-        # ---- Параметры таймера ----
         self.params_parent = tk.Frame(main_frame, bg=BG)
         self.params_parent.pack(fill="x", pady=(3, 1))
 
@@ -423,14 +483,12 @@ class HuEvoClicker:
         )
         self.mode_btn.pack(fill="x", pady=(2, 2), ipady=1)
 
-        # ---- Статус ----
         self.pill = tk.Label(
             main_frame, text="Заглох", bg=BG, fg=RED_COL,
             font=("Segoe UI", 8, "bold"),
         )
         self.pill.pack(pady=(1, 1))
 
-        # ---- Старт ----
         self.start_btn = tk.Button(
             main_frame, text="▶  Старт (F6)", command=self.toggle_clicking,
             bg=GREEN_COL, fg="#fff",
@@ -440,7 +498,6 @@ class HuEvoClicker:
         )
         self.start_btn.pack(fill="x", pady=(0, 2), ipady=4)
 
-        # ---- Нижняя часть ----
         tk.Label(main_frame, text="F2 — точка · F6 — старт/стоп",
                  bg=BG, fg=TEXT_MUTED, font=FONT_TINY).pack(pady=(0, 1))
 
@@ -480,7 +537,7 @@ class HuEvoClicker:
             self.exp_day_val.config(text=f"{self.stat_day}/90k")
             self.exp_clicks_val.config(text=self.stat_clicks)
             self.exp_total_val.config(text=self.stat_total)
-            
+
             self.expanded_card.place(x=12, y=32, relwidth=1, width=-24, height=72)
             self.expanded_card.lift()
 
@@ -494,7 +551,7 @@ class HuEvoClicker:
             bx = self.balance_card.winfo_rootx()
             by = self.balance_card.winfo_rooty()
             bw = self.balance_card.winfo_width()
-            
+
             if not (bx <= rx <= bx + bw and by <= ry <= by + 104):
                 self.expanded_card.place_forget()
         except Exception:
@@ -539,7 +596,6 @@ class HuEvoClicker:
             except Exception:
                 pass
 
-        # Кастомная шапка для модального окна
         modal_title = tk.Frame(modal, bg=BG, height=28)
         modal_title.pack(fill="x", side="top")
         modal_title.pack_propagate(False)
@@ -565,7 +621,6 @@ class HuEvoClicker:
         modal_body = tk.Frame(modal, bg=BG)
         modal_body.pack(fill="both", expand=True, padx=16, pady=8)
 
-        # ---- Выбор режима синхронизации ----
         sync_mode_var = tk.StringVar(value="script")
 
         mode_frame = tk.Frame(modal_body, bg=BG)
@@ -573,21 +628,18 @@ class HuEvoClicker:
 
         tk.Label(mode_frame, text="Способ синхронизации:", bg=BG, fg=TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
 
-        rb_script = tk.Radiobutton(
+        tk.Radiobutton(
             mode_frame, text="Скрипт Tampermonkey", variable=sync_mode_var, value="script",
             bg=BG, fg=TEXT_MUTED, selectcolor=SURFACE, activebackground=BG,
             activeforeground=TEXT, font=FONT_BODY, anchor="w", cursor="hand2"
-        )
-        rb_script.pack(fill="x", pady=1)
+        ).pack(fill="x", pady=1)
 
-        rb_webview = tk.Radiobutton(
+        tk.Radiobutton(
             mode_frame, text="Авторизация в WebView (pywebview)", variable=sync_mode_var, value="webview",
             bg=BG, fg=TEXT_MUTED, selectcolor=SURFACE, activebackground=BG,
             activeforeground=TEXT, font=FONT_BODY, anchor="w", cursor="hand2"
-        )
-        rb_webview.pack(fill="x", pady=1)
+        ).pack(fill="x", pady=1)
 
-        # ---- Контейнер для контента скрипта ----
         script_content = tk.Frame(modal_body, bg=BG)
 
         tk.Label(
@@ -666,7 +718,7 @@ class HuEvoClicker:
         )
 
         copy_icon_btn = tk.Button(
-            code_header, text="📋", 
+            code_header, text="📋",
             command=lambda: self._copy_to_clipboard(script_code, copy_icon_btn, is_icon=True),
             bg=SURFACE, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
             relief="flat", bd=0, font=("Segoe UI", 9), cursor="hand2",
@@ -686,14 +738,13 @@ class HuEvoClicker:
         script_box.config(state="disabled")
 
         copy_btn = tk.Button(
-            script_content, text="Скопировать скрипт полностью", 
+            script_content, text="Скопировать скрипт полностью",
             command=lambda: self._copy_to_clipboard(script_code, copy_btn, is_icon=False),
             bg=ACCENT, fg="#fff", activebackground=ACCENT_HOV, activeforeground="#fff",
             relief="flat", bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2"
         )
         copy_btn.pack(fill="x", pady=(0, 8), ipady=6)
 
-        # ---- Контейнер для WebView ----
         webview_content = tk.Frame(modal_body, bg=BG)
 
         tk.Label(
@@ -705,7 +756,8 @@ class HuEvoClicker:
             "1. Нажмите кнопку ниже — откроется окно с huevo.su/clicker.\n"
             "2. Войдите в свой аккаунт (один раз, сессия сохранится).\n"
             "3. Кликер начнёт автоматически опрашивать страницу\n"
-            "   каждые 20 секунд и обновлять баланс."
+            "   каждые 20 секунд и обновлять баланс.\n\n"
+            "Требуется WebView2 Runtime (в Windows 10/11 уже есть)."
         )
         tk.Label(
             webview_content, text=wv_info, bg=BG, fg=TEXT_MUTED,
@@ -756,7 +808,6 @@ class HuEvoClicker:
         )
         stop_wv_btn.pack(fill="x", pady=(0, 8), ipady=4)
 
-        # ---- Переключение контента ----
         def update_mode_view(*args):
             if sync_mode_var.get() == "script":
                 webview_content.pack_forget()
@@ -768,6 +819,9 @@ class HuEvoClicker:
         sync_mode_var.trace_add("write", update_mode_view)
         update_mode_view()
 
+    # ------------------------------------------------------
+    #  WebView-синхронизация через ОТДЕЛЬНЫЙ ПРОЦЕСС
+    # ------------------------------------------------------
     def _start_webview_sync(self):
         if not WEBVIEW_AVAILABLE:
             return
@@ -776,75 +830,25 @@ class HuEvoClicker:
 
         self.webview_running = True
 
-        def run_webview():
-            try:
-                window = webview.create_window(
-                    "huEVO — авторизация",
-                    "https://huevo.su/clicker",
-                    width=900, height=650,
-                    text_select=True,
-                )
-                self.webview_window = window
+        p = multiprocessing.Process(target=_webview_process_target, daemon=True)
+        p.start()
+        self.webview_process = p
 
-                def poll_loop(w):
-                    time.sleep(3)  # даём странице загрузиться
-                    while self.webview_running:
-                        try:
-                            js = """
-                            (function() {
-                                const bal = document.getElementById('ck-balance');
-                                const day = document.getElementById('ck-day');
-                                const clicks = document.getElementById('ck-clicks');
-                                const total = document.getElementById('ck-total');
-                                const user = document.querySelector('.mh-user-name');
-                                const av = document.querySelector('.mh-user-av');
-                                let avUrl = av ? av.src : '';
-                                if (avUrl && avUrl.startsWith('/')) avUrl = location.origin + avUrl;
-                                return {
-                                    balance: bal ? bal.innerText : '',
-                                    day: day ? day.innerText : '0',
-                                    clicks: clicks ? clicks.innerText : '0',
-                                    total: total ? total.innerText : '0',
-                                    user: user ? user.innerText : '',
-                                    av: avUrl
-                                };
-                            })();
-                            """
-                            data = w.evaluate_js(js)
-                            if data and isinstance(data, dict) and data.get("balance"):
-                                self.root.after(0, lambda d=data: self._update_balance_from_web(
-                                    d.get("balance", ""),
-                                    d.get("user", ""),
-                                    d.get("av", "")
-                                ))
-                                self.stat_day = data.get("day", "0")
-                                self.stat_clicks = data.get("clicks", "0")
-                                self.stat_total = data.get("total", "0")
-                            time.sleep(20)
-                        except Exception:
-                            time.sleep(5)
+        def monitor():
+            p.join()
+            self.webview_running = False
+            self.webview_process = None
 
-                t = threading.Thread(target=poll_loop, args=(window,), daemon=True)
-                t.start()
-
-                webview.start(private_mode=False, debug=False)
-            except Exception:
-                pass
-            finally:
-                self.webview_running = False
-                self.webview_window = None
-
-        self.webview_thread = threading.Thread(target=run_webview, daemon=True)
-        self.webview_thread.start()
+        threading.Thread(target=monitor, daemon=True).start()
 
     def _stop_webview_sync(self, status_label=None):
         self.webview_running = False
-        if self.webview_window is not None:
+        if self.webview_process is not None:
             try:
-                self.webview_window.destroy()
+                self.webview_process.terminate()
             except Exception:
                 pass
-            self.webview_window = None
+            self.webview_process = None
         if status_label:
             try:
                 status_label.config(text="Статус: остановлено", fg=TEXT_MUTED)
@@ -870,19 +874,19 @@ class HuEvoClicker:
                     query = urllib.parse.parse_qs(parsed.query)
                     bal_str = query.get("balance", [""])[0]
                     toast_str = query.get("toast", [""])[0]
-                    
+
                     outer.stat_day = query.get("day", ["0"])[0]
                     outer.stat_clicks = query.get("clicks", ["0"])[0]
                     outer.stat_total = query.get("total", ["0"])[0]
-                    
+
                     user_str = query.get("user", [""])[0]
                     av_url = query.get("av", [""])[0]
-                    
+
                     if bal_str:
                         outer._update_balance_from_web(bal_str, user_str, av_url)
                     if toast_str:
                         outer._show_toast(toast_str)
-                
+
                 self.send_response(200)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
@@ -901,11 +905,11 @@ class HuEvoClicker:
         is_first_active = not self.tab_active
         self.tab_active = True
         self.last_update_time = time.time()
-        
+
         try:
             bal = int(re.sub(r"\D", "", bal_str))
             self.current_bal_text = f"{bal:,}".replace(",", " ")
-            
+
             short_user = ""
             if user_str:
                 clean_u = user_str.strip()
@@ -922,12 +926,12 @@ class HuEvoClicker:
                         img_data = response.read()
                         im = Image.open(io.BytesIO(img_data)).convert("RGBA")
                         im = im.resize((20, 20), Image.Resampling.LANCZOS)
-                        
+
                         mask = Image.new('L', (20, 20), 0)
                         draw = ImageDraw.Draw(mask)
                         draw.ellipse((0, 0, 20, 20), fill=255)
                         im.putalpha(mask)
-                        
+
                         self.avatar_photo = ImageTk.PhotoImage(im)
                 except Exception:
                     self.avatar_photo = None
@@ -935,12 +939,12 @@ class HuEvoClicker:
             def _do():
                 if is_first_active and self.cat_photo_normal:
                     self.balance_label.config(image=self.cat_photo_normal)
-                
+
                 self.balance_label.config(
                     text=f" {self.current_bal_text}", fg=TEXT,
                 )
                 self.balance_card.config(bg=SURFACE)
-                
+
                 if short_user:
                     self.user_label.config(text=short_user)
                 if self.avatar_photo:
@@ -957,10 +961,10 @@ class HuEvoClicker:
         def _do():
             if self.toast_anim_id:
                 self.root.after_cancel(self.toast_anim_id)
-            
+
             self._trigger_cat_bounce()
             self.toast_label.config(text=toast_str, bg=GREEN_COL, fg="#ffffff")
-            
+
             def step_in(p):
                 if p <= 5:
                     self.toast_label.config(pady=p)
@@ -1093,6 +1097,7 @@ class HuEvoClicker:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     root = tk.Tk()
     app = HuEvoClicker(root)
     root.mainloop()
